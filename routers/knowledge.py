@@ -14,11 +14,13 @@ class URLRequest(BaseModel):
     url: str
     title: Optional[str] = None
     user_id: str
+    space_id: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
     query: str
     user_id: str
+    space_id: Optional[str] = None
     document_ids: Optional[list[str]] = None
 
 
@@ -35,9 +37,14 @@ class DocumentCreate(BaseModel):
 async def upload_pdf(
     file: UploadFile = File(...),
     user_id: str = Header(...),
+    space_id: Optional[str] = Header(None),
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
+
+    # Normalize empty-string header to None
+    if not space_id:
+        space_id = None
 
     content = await file.read()
 
@@ -48,6 +55,7 @@ async def upload_pdf(
 
     doc = supabase.table("documents").insert({
         "user_id": user_id,
+        "space_id": space_id,
         "title": file.filename.replace(".pdf", ""),
         "source_type": "pdf",
         "raw_content": text,
@@ -68,14 +76,15 @@ async def upload_pdf(
 @router.post("/upload/url")
 async def upload_url(body: URLRequest):
     try:
-        text = await extract_url_text(body.url)
+        text, page_title = await extract_url_text(body.url)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"URL extraction failed: {str(e)}")
 
-    title = body.title or body.url.split("/")[-1] or "Untitled"
+    title = body.title or page_title or "Untitled"
 
     doc = supabase.table("documents").insert({
         "user_id": body.user_id,
+        "space_id": body.space_id,
         "title": title,
         "source_type": "url",
         "source_url": body.url,
@@ -116,13 +125,16 @@ async def upload_text(body: DocumentCreate):
 
 # --- Get all documents ---
 @router.get("/documents/{user_id}")
-async def get_documents(user_id: str):
-    docs = supabase.table("documents") \
+async def get_documents(user_id: str, space_id: Optional[str] = None):
+    query = supabase.table("documents") \
         .select("id, title, source_type, source_url, created_at") \
         .eq("user_id", user_id) \
-        .order("created_at", desc=True) \
-        .execute()
+        .order("created_at", desc=True)
 
+    if space_id:
+        query = query.eq("space_id", space_id)
+
+    docs = query.execute()
     return docs.data
 
 
@@ -148,6 +160,7 @@ async def chat(body: ChatRequest):
     response = await chat_with_documents(
         query=body.query,
         user_id=body.user_id,
+        space_id=body.space_id,
         document_ids=body.document_ids,
     )
     return response
@@ -164,7 +177,7 @@ def extract_pdf_text(content: bytes) -> str:
     return text.strip()
 
 
-async def extract_url_text(url: str) -> str:
+async def extract_url_text(url: str) -> tuple[str, str]:
     import httpx
     from bs4 import BeautifulSoup
 
@@ -172,7 +185,19 @@ async def extract_url_text(url: str) -> str:
         response = await client.get(url, follow_redirects=True)
         soup = BeautifulSoup(response.text, "html.parser")
 
+        # Extract title: <title> tag → first <h1> → URL slug fallback
+        page_title = ""
+        if soup.title and soup.title.string:
+            page_title = soup.title.string.strip()
+        elif soup.find("h1"):
+            page_title = soup.find("h1").get_text(strip=True)
+        else:
+            # Derive from URL: strip trailing slash, take last segment, humanize
+            slug = url.rstrip("/").split("/")[-1]
+            page_title = slug.replace("-", " ").replace("_", " ").title() if slug else ""
+
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
 
-        return soup.get_text(separator="\n", strip=True)
+        text = soup.get_text(separator="\n", strip=True)
+        return text, page_title
