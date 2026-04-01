@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+openai
+python-multipart
+python-dotenv
+anthropic
+supabase
+pypdf2
+httpx
+beautifulsoup4
+tiktoken
+numpy
+voyageai
