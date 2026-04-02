@@ -9,9 +9,11 @@ SUB-AGENTS:
 2. QUIZ: "Make a quiz...", "Test me on...", "Quiz about [topic]".
 3. REPORT: "Generate a report...", "Create a project plan...", "Executive summary".
 4. TASK: "Add a task...", "Remember to...", "Todo: ...".
-5. SPACE_MANAGEMENT: "Create a space...", "New hub...", "Setup project...".
+5. SPACE_MANAGEMENT: Structural changes like "Create a workspace...", "New hub...", "Setup space...". Focuses on organization.
 6. ANNOTATION: "Highlight this...", "Annotate [doc]...", "Link these notes".
-7. CALENDAR: "Schedule a meeting...", "Set an event for...", "Add to my calendar".
+7. CALENDAR: Scheduling and dates. "Setup a mission...", "Schedule a meeting...", "Add event to calendar...". Focuses on time-based events.
+
+CRITICAL: "Missions" belong to the CALENDAR (Events). "Spaces" and "Hubs" belong to SPACE_MANAGEMENT.
 
 OUTPUT REQUIREMENT:
 Return ONLY the JSON-formatted classification.
