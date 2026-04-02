@@ -7,33 +7,37 @@ router = APIRouter(prefix="/spaces", tags=["spaces"])
 
 
 class SpaceCreate(BaseModel):
-  user_id: str
-  name: str
-  icon: str = "Folder"
-  color: str = "#7F77DD"
-  description: Optional[str] = None
+    user_id: str
+    name: str
+    icon: str = "Folder"
+    color: str = "#7F77DD"
+    category: str = "personal"
+    description: Optional[str] = None
 
 
 class SpaceUpdate(BaseModel):
     name: Optional[str] = None
-    emoji: Optional[str] = None
+    icon: Optional[str] = None
     color: Optional[str] = None
+    category: Optional[str] = None
     description: Optional[str] = None
     order_index: Optional[int] = None
 
 
-# --- Get all spaces ---
+# --- Get all spaces (top level categories) ---
 @router.get("/{user_id}")
 async def get_spaces(user_id: str):
+    # Get spaces with a count of hubs inside them
+    # Note: we filter by category if needed later
     spaces = supabase.table("spaces") \
-        .select("*, space_modules(*)") \
+        .select("*, hubs(count)") \
         .eq("user_id", user_id) \
         .order("order_index") \
         .execute()
     return spaces.data
 
 
-# --- Create space ---
+# --- Create space (Category) ---
 @router.post("/")
 async def create_space(body: SpaceCreate):
     # Get current max order
@@ -51,26 +55,17 @@ async def create_space(body: SpaceCreate):
     space = supabase.table("spaces").insert({
         "user_id": body.user_id,
         "name": body.name,
+        "icon": body.icon,
         "color": body.color,
+        "category": body.category,
         "description": body.description,
         "order_index": next_order,
     }).execute()
 
-    space_id = space.data[0]["id"]
+    if not space.data:
+        raise HTTPException(status_code=500, detail="Failed to create space")
 
-    # Enable all modules by default
-    modules = ["track", "annotate", "knowledge", "deliver", "automate"]
-    for i, module in enumerate(modules):
-        try:
-            supabase.table("space_modules").insert({
-                "space_id": space_id,
-                "module": module,
-                "order_index": i,
-                "is_enabled": True,
-            }).execute()
-        except Exception as e:
-            print(f"Warning: could not insert space_module '{module}': {e}")
-
+    # No longer inserting space_modules here as they belong to hubs now
     return space.data[0]
 
 

@@ -1,8 +1,10 @@
 import os
-import voyageai
+from fastembed import TextEmbedding
 from database import supabase
 
-vo = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY"))
+# Initialize FastEmbed (Optimized for CPU)
+# This will download the BGE-Small model (384-dims) on first run (~133MB)
+model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
@@ -20,21 +22,16 @@ def chunk_text(text: str) -> list[str]:
 
 
 def embed_text(text: str) -> list[float]:
-    result = vo.embed(
-        [text],
-        model="voyage-3",
-        input_type="document",
-    )
-    return result.embeddings[0]
+    """Generates an embedding for a document chunk using the local OS model."""
+    # FastEmbed's embed() returns a generator of numpy arrays
+    embeddings = list(model.embed([text]))
+    return embeddings[0].tolist()
 
 
 def embed_query(text: str) -> list[float]:
-    result = vo.embed(
-        [text],
-        model="voyage-3",
-        input_type="query",
-    )
-    return result.embeddings[0]
+    """Generates an embedding for a search query. Same model used for documents."""
+    embeddings = list(model.embed([text]))
+    return embeddings[0].tolist()
 
 
 async def process_document(document_id: str, text: str):
@@ -57,13 +54,15 @@ async def process_document(document_id: str, text: str):
 
         except Exception as e:
             print(f"Chunk {index} failed: {e}")
+            # If embedding fails, still insert the chunk without the vector
+            # (less ideal, but prevents total failure)
             supabase.table("document_chunks").insert({
                 "document_id": document_id,
                 "content": chunk,
                 "chunk_index": index,
             }).execute()
-            
-            
+
+
 async def search_chunks(
     query: str,
     user_id: str,
@@ -71,7 +70,7 @@ async def search_chunks(
     limit: int = 8,
 ) -> list[dict]:
     try:
-        query_embedding = embed_query(query)  # use query type
+        query_embedding = embed_query(query)
 
         result = supabase.rpc("match_chunks", {
             "query_embedding": query_embedding,
@@ -84,6 +83,7 @@ async def search_chunks(
 
     except Exception as e:
         print(f"Vector search failed: {e}")
+        # Fallback to key-word style or simple select if vector search is broken
         query_obj = supabase.table("document_chunks") \
             .select("content, document_id, chunk_index") \
             .limit(limit)

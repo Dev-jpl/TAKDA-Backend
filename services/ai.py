@@ -63,6 +63,7 @@ async def search_chunks(
     query: str,
     user_id: str,
     space_id: str = None,
+    hub_id: str = None,
     document_ids: list[str] = None,
     limit: int = 8,
 ) -> list[dict]:
@@ -85,15 +86,16 @@ async def search_chunks(
         result = query_obj.execute()
         chunks = result.data or []
 
-    # Filter by space_id if provided — join through documents table
-    if space_id and chunks:
-        doc_ids_in_space = [
-            d["id"] for d in supabase.table("documents")
-            .select("id")
-            .eq("space_id", space_id)
-            .execute().data
-        ]
-        chunks = [c for c in chunks if c.get("document_id") in doc_ids_in_space]
+    # Filter by hub_id or space_id if provided — join through documents table
+    if (hub_id or space_id) and chunks:
+        query = supabase.table("documents").select("id")
+        if hub_id:
+            query = query.eq("hub_id", hub_id)
+        elif space_id:
+            query = query.eq("space_id", space_id)
+        
+        doc_ids = [d["id"] for d in query.execute().data]
+        chunks = [c for c in chunks if c.get("document_id") in doc_ids]
 
     return chunks
 
@@ -102,9 +104,10 @@ async def chat_with_documents(
     query: str,
     user_id: str,
     space_id: str = None,
+    hub_id: str = None,
     document_ids: list[str] = None,
 ) -> dict:
-    chunks = await search_chunks(query, user_id, space_id, document_ids)
+    chunks = await search_chunks(query, user_id, space_id, hub_id, document_ids)
 
     if not chunks:
         return {

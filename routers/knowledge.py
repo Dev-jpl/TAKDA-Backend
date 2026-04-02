@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header, Form
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -14,13 +14,13 @@ class URLRequest(BaseModel):
     url: str
     title: Optional[str] = None
     user_id: str
-    space_id: Optional[str] = None
+    hub_id: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
     query: str
     user_id: str
-    space_id: Optional[str] = None
+    hub_id: Optional[str] = None
     document_ids: Optional[list[str]] = None
 
 
@@ -30,21 +30,22 @@ class DocumentCreate(BaseModel):
     raw_content: str
     source_url: Optional[str] = None
     user_id: str
+    hub_id: Optional[str] = None
 
 
 # --- Upload PDF ---
 @router.post("/upload/pdf")
 async def upload_pdf(
     file: UploadFile = File(...),
-    user_id: str = Header(...),
-    space_id: Optional[str] = Header(None),
+    user_id: str = Form(...),
+    hub_id: Optional[str] = Form(None),
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
 
-    # Normalize empty-string header to None
-    if not space_id:
-        space_id = None
+    # Normalize empty-string to None
+    if not hub_id or hub_id == "":
+        hub_id = None
 
     content = await file.read()
 
@@ -55,7 +56,7 @@ async def upload_pdf(
 
     doc = supabase.table("documents").insert({
         "user_id": user_id,
-        "space_id": space_id,
+        "hub_id": hub_id,
         "title": file.filename.replace(".pdf", ""),
         "source_type": "pdf",
         "raw_content": text,
@@ -84,7 +85,7 @@ async def upload_url(body: URLRequest):
 
     doc = supabase.table("documents").insert({
         "user_id": body.user_id,
-        "space_id": body.space_id,
+        "hub_id": body.hub_id,
         "title": title,
         "source_type": "url",
         "source_url": body.url,
@@ -102,11 +103,27 @@ async def upload_url(body: URLRequest):
     }
 
 
+# --- Get all documents ---
+@router.get("/documents/{user_id}")
+async def get_documents(user_id: str, hub_id: Optional[str] = None):
+    query = supabase.table("documents") \
+        .select("id, title, source_type, source_url, created_at") \
+        .eq("user_id", user_id) \
+        .order("created_at", desc=True)
+
+    if hub_id:
+        query = query.eq("hub_id", hub_id)
+
+    docs = query.execute()
+    return docs.data
+
+
 # --- Upload plain text / markdown ---
 @router.post("/upload/text")
 async def upload_text(body: DocumentCreate):
     doc = supabase.table("documents").insert({
         "user_id": body.user_id,
+        "hub_id": body.hub_id,
         "title": body.title,
         "source_type": body.source_type,
         "raw_content": body.raw_content,
@@ -121,21 +138,6 @@ async def upload_text(body: DocumentCreate):
         "title": body.title,
         "chunks_processed": True,
     }
-
-
-# --- Get all documents ---
-@router.get("/documents/{user_id}")
-async def get_documents(user_id: str, space_id: Optional[str] = None):
-    query = supabase.table("documents") \
-        .select("id, title, source_type, source_url, created_at") \
-        .eq("user_id", user_id) \
-        .order("created_at", desc=True)
-
-    if space_id:
-        query = query.eq("space_id", space_id)
-
-    docs = query.execute()
-    return docs.data
 
 
 # --- Delete document ---
@@ -160,7 +162,7 @@ async def chat(body: ChatRequest):
     response = await chat_with_documents(
         query=body.query,
         user_id=body.user_id,
-        space_id=body.space_id,
+        hub_id=body.hub_id,
         document_ids=body.document_ids,
     )
     return response
@@ -185,14 +187,12 @@ async def extract_url_text(url: str) -> tuple[str, str]:
         response = await client.get(url, follow_redirects=True)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Extract title: <title> tag → first <h1> → URL slug fallback
         page_title = ""
         if soup.title and soup.title.string:
             page_title = soup.title.string.strip()
         elif soup.find("h1"):
             page_title = soup.find("h1").get_text(strip=True)
         else:
-            # Derive from URL: strip trailing slash, take last segment, humanize
             slug = url.rstrip("/").split("/")[-1]
             page_title = slug.replace("-", " ").replace("_", " ").title() if slug else ""
 

@@ -10,4 +10,4 @@ httpx
 beautifulsoup4
 tiktoken
 numpy
-voyageai
+fastembed
