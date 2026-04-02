@@ -1,45 +1,44 @@
-from services.ai import get_ai_response_async, get_streaming_ai_response
-import json
+from services.ai import get_ai_response_async
+import json, re
 
-COORDINATOR_PROMPT = """You are the Kalay Orchestrator. Your role is INTENT CLASSIFICATION and ROUTING.
-Analyze the user's message and determine which specialized sub-agent is best suited to handle it.
+COORDINATOR_PROMPT = """You are Kalay's intent router inside TAKDA — a personal life OS.
 
-SUB-AGENTS:
-1. CONVERSATION: General chat, greeting, or unclear intent.
-2. QUIZ: "Make a quiz...", "Test me on...", "Quiz about [topic]".
-3. REPORT: "Generate a report...", "Create a project plan...", "Executive summary".
-4. TASK: "Add a task...", "Remember to...", "Todo: ...".
-5. SPACE_MANAGEMENT: Structural changes like "Create a workspace...", "New hub...", "Setup space...". Focuses on organization.
-6. ANNOTATION: "Highlight this...", "Annotate [doc]...", "Link these notes".
-7. CALENDAR: Scheduling and dates. "Setup a mission...", "Schedule a meeting...", "Add event to calendar...". Focuses on time-based events.
+Classify the user's message into one or more of these intents:
+TASK       — create, update, delete, or list tasks
+CALENDAR   — schedule events, set reminders
+REPORT     — generate reports, summaries, plans, presentations
+QUIZ       — create quizzes or flashcards from documents
+KNOWLEDGE  — search documents, answer questions from notes
+CRUD_SPACE — create or manage spaces and hubs
+CHAT       — general conversation, greetings, unclear
 
-CRITICAL: "Missions" belong to the CALENDAR (Events). "Spaces" and "Hubs" belong to SPACE_MANAGEMENT.
+Rules:
+- A message can have multiple intents (e.g. "add a task and schedule it" = TASK + CALENDAR)
+- When in doubt, use CHAT
+- Always return valid JSON only, no explanation
 
-OUTPUT REQUIREMENT:
-Return ONLY the JSON-formatted classification.
-{ "intent": "QUIZ", "reason": "...", "confidence": 0.95 }
+Return format:
+{"intents": ["TASK"], "primary": "TASK"}
+or
+{"intents": ["TASK", "CALENDAR"], "primary": "TASK"}
 """
 
 class AgentCoordinator:
     @staticmethod
-    async def classify_intent(message: str) -> dict:
-        system_prompt = COORDINATOR_PROMPT
-        user_prompt = f"Identify the intent for this message: '{message}'"
-        
-        response = await get_ai_response_async(system_prompt, user_prompt)
+    async def classify_intent(message: str, conversation_history: list = []) -> dict:
+        history_context = ""
+        if conversation_history:
+            last = conversation_history[-3:]
+            history_context = "\n".join([f"{m['role']}: {m['content'][:100]}" for m in last])
+            history_context = f"\nRecent conversation:\n{history_context}\n"
+
+        user_prompt = f"{history_context}Message to classify: \"{message}\""
+
+        response = await get_ai_response_async(COORDINATOR_PROMPT, user_prompt)
         try:
-            # Basic JSON extraction in case the model adds extra text
-            import re
             match = re.search(r'\{.*\}', response, re.DOTALL)
             if match:
                 return json.loads(match.group())
-            return {"intent": "CONVERSATION", "reason": "fallback"}
         except:
-            return {"intent": "CONVERSATION", "reason": "error"}
-
-    @staticmethod
-    async def route_request(intent: str, **kwargs):
-        # This will be used in kalay_agent.py to route the stream
-        # I'll implement the actual routing logic directly in kalay_agent.py for now
-        # to keep imports clean, but this class serves the classification.
-        pass
+            pass
+        return {"intents": ["CHAT"], "primary": "CHAT"}

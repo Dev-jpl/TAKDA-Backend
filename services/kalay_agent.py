@@ -1,140 +1,206 @@
-import json
 import re
+import json
 from database import supabase
-from services.ai import get_ai_response, get_streaming_ai_response, search_chunks
+from services.ai import get_streaming_ai_response, search_chunks
 from services.agents.coordinator import AgentCoordinator
-from services.agents.quiz_agent import generate_quiz_stream, save_quiz_to_db
-from services.agents.report_agent import generate_report_stream
-from services.agents.task_agent import extract_tasks_stream
-from services.agents.space_agent import manage_spaces_stream
-from services.agents.calendar_agent import generate_calendar_stream
+from services.agents.task_agent import run_task_agent_stream, execute_task_action
+from services.agents.report_agent import run_report_agent_stream
+from services.agents.calendar_agent import run_calendar_agent_stream
+from services.agents.quiz_agent import generate_quiz_stream
 
-async def process_kalay_chat_stream(user_id: str, session_id: str, message: str, space_ids: list[str], hub_ids: list[str]):
-    # 1. Fetch Context (Tasks, Documents, and Names)
-    tasks_context = ""
-    if hub_ids:
-        tasks_res = supabase.table("tasks").select("title, status, priority, hub_id").in_("hub_id", hub_ids).execute()
-        if tasks_res.data:
-            tasks_context = "CURRENT TASKS:\n" + "\n".join([f"- {t['title']} ({t['status']})" for t in tasks_res.data])
+CHAT_PROMPT = """You are Kalay — a warm, sharp AI companion inside TAKDA, a personal life OS.
 
-    spaces_info = ""
-    if space_ids:
-        spaces_res = supabase.table("spaces").select("id, name").in_("id", space_ids).execute()
-        if spaces_res.data:
-            spaces_info = "EXISTING SPACES:\n" + "\n".join([f"- {s['name']} (ID: {s['id']})" for s in spaces_res.data])
+You know the user's tasks, documents, and spaces.
+You are concise, direct, and helpful. Not chatty.
+You speak like a smart friend, not a corporate assistant.
 
-    docs_context = ""
-    if message.strip().endswith("?") or len(message.split()) > 4:
-        doc_res = supabase.table("documents").select("id").eq("user_id", user_id).execute()
-        doc_ids = [d["id"] for d in doc_res.data] if doc_res.data else []
-        if doc_ids:
-            chunks = await search_chunks(message, user_id, document_ids=doc_ids, limit=5)
-            if chunks:
-                docs_context = "\nRELEVANT KNOWLEDGE:\n" + "\n".join([f"[{i+1}] {c['content']}" for i, c in enumerate(chunks)])
-
-    # 2. Classify Intent
-    classification = await AgentCoordinator.classify_intent(message)
-    intent = classification.get("intent", "CONVERSATION")
-    
-    # 3. Route to Sub-Agent Stream
-    if intent == "QUIZ":
-        async for chunk in generate_quiz_stream(user_id, message, docs_context):
-            yield chunk
-    elif intent == "REPORT":
-        async for chunk in generate_report_stream(user_id, message, docs_context, tasks_context):
-            yield chunk
-    elif intent == "TASK":
-        async for chunk in extract_tasks_stream(user_id, message, spaces_info):
-            yield chunk
-    elif intent == "SPACE_MANAGEMENT":
-        async for chunk in manage_spaces_stream(user_id, message, spaces_info):
-            yield chunk
-    elif intent == "CALENDAR":
-        async for chunk in generate_calendar_stream(user_id, message):
-            yield chunk
-    else:
-        # Standard Conversation Fallback
-        system_prompt = f"""You are Kalay, the high-agency AI companion for TAKDA.
-CONTEXT:
-{tasks_context}
-{docs_context}
-{spaces_info}
-
-If the user wants a task, report, quiz, or space management, you would normally trigger a sub-agent, 
-but for now, just chat professionally.
+If the user asks about their data, use the context provided.
+If you don't have enough context, say so briefly and ask what they need.
+Never make up tasks, events, or data that aren't in the context.
 """
-        user_prompt = f"User: {message}\nKalay:"
-        async for chunk in get_streaming_ai_response(system_prompt, user_prompt):
+
+async def build_context(user_id: str, hub_ids: list, space_ids: list, message: str) -> dict:
+    context = {"tasks": [], "hubs": [], "docs_text": "", "spaces": []}
+
+    if hub_ids:
+        tasks_res = supabase.table("tasks") \
+            .select("id, title, status, priority, hub_id") \
+            .in_("hub_id", hub_ids) \
+            .neq("status", "done") \
+            .limit(20) \
+            .execute()
+        context["tasks"] = tasks_res.data or []
+
+        hubs_res = supabase.table("hubs") \
+            .select("id, name, space_id, spaces(name)") \
+            .in_("id", hub_ids) \
+            .execute()
+        context["hubs"] = [
+            {
+                "id": h["id"],
+                "name": h["name"],
+                "space_name": h.get("spaces", {}).get("name", ""),
+            }
+            for h in (hubs_res.data or [])
+        ]
+
+    if space_ids:
+        spaces_res = supabase.table("spaces") \
+            .select("id, name, category") \
+            .in_("id", space_ids) \
+            .execute()
+        context["spaces"] = spaces_res.data or []
+
+    # Semantic search only for questions or longer messages
+    if len(message.split()) > 3:
+        doc_res = supabase.table("documents") \
+            .select("id") \
+            .eq("user_id", user_id) \
+            .execute()
+        doc_ids = [d["id"] for d in (doc_res.data or [])]
+        if doc_ids:
+            chunks = await search_chunks(message, user_id, document_ids=doc_ids, limit=4)
+            if chunks:
+                context["docs_text"] = "\n".join([f"[{i+1}] {c['content']}" for i, c in enumerate(chunks)])
+
+    return context
+
+
+async def process_kalay_chat_stream(
+    user_id: str,
+    session_id: str,
+    message: str,
+    space_ids: list,
+    hub_ids: list,
+    conversation_history: list = []
+):
+    # 1. Build context
+    context = await build_context(user_id, hub_ids, space_ids, message)
+
+    tasks_text = "\n".join([
+        f"- [{t['status']}] {t['title']} (priority: {t['priority']}, hub: {t['hub_id']})"
+        for t in context["tasks"]
+    ]) or "No active tasks."
+
+    hubs_text = "\n".join([
+        f"- {h['name']} (id: {h['id']}, space: {h['space_name']})"
+        for h in context["hubs"]
+    ]) or "No hubs selected."
+
+    # 2. Classify intent (with history for better accuracy)
+    classification = await AgentCoordinator.classify_intent(message, conversation_history)
+    intents = classification.get("intents", ["CHAT"])
+    primary = classification.get("primary", "CHAT")
+
+    # 3. Route to primary agent — yield its stream
+    if primary == "TASK":
+        async for chunk in run_task_agent_stream(message, context["hubs"], conversation_history):
             yield chunk
 
-async def parse_and_execute_actions(user_id: str, session_id: str, full_text: str, space_ids: list[str], hub_ids: list[str]):
+    elif primary == "REPORT":
+        async for chunk in run_report_agent_stream(
+            message, tasks_text, context["docs_text"], conversation_history
+        ):
+            yield chunk
+
+    elif primary == "CALENDAR":
+        async for chunk in run_calendar_agent_stream(message, conversation_history):
+            yield chunk
+
+    elif primary == "QUIZ":
+        async for chunk in generate_quiz_stream(user_id, message, context["docs_text"]):
+            yield chunk
+
+    else:
+        # CHAT fallback — Kalay with full context
+        history_text = "\n".join([
+            f"{m['role']}: {m['content'][:200]}"
+            for m in (conversation_history[-6:] if conversation_history else [])
+        ])
+
+        user_prompt = f"""Context:
+Active tasks:
+{tasks_text}
+
+Available hubs:
+{hubs_text}
+
+Relevant knowledge:
+{context['docs_text'] or 'None found.'}
+
+Conversation history:
+{history_text}
+
+User: {message}"""
+
+        async for chunk in get_streaming_ai_response(CHAT_PROMPT, user_prompt):
+            yield chunk
+
+
+async def parse_and_execute_actions(
+    user_id: str,
+    session_id: str,
+    full_text: str,
+    space_ids: list,
+    hub_ids: list
+) -> tuple[str, list]:
     actions = []
-    last_created_space_id = None
+    clean_text = full_text
 
-    # 1. Space Creation (Process first for chaining)
-    space_match = re.search(r'\[CREATE_SPACE:\s*name="([^"]+)",\s*icon="([^"]+)",\s*color="([^"]+)"\]', full_text)
-    if space_match:
-        name, icon, color = space_match.groups()
-        res = supabase.table("spaces").insert({"user_id": user_id, "name": name, "icon": icon, "color": color}).execute()
-        if res.data:
-            last_created_space_id = res.data[0]["id"]
-            actions.append({"type": "space_created", "label": name, "id": last_created_space_id})
+    # Find all action tags
+    tag_pattern = re.compile(r'\[(CREATE_TASK|UPDATE_TASK|CREATE_EVENT|SAVE_REPORT|QUIZ_DATA)[:\s]([^\]]*)\]', re.DOTALL)
 
-    # 2. Hub Creation (Handle PENDING_SPACE)
-    hub_matches = re.finditer(r'\[CREATE_HUB:\s*space_id="([^"]+)",\s*name="([^"]+)",\s*icon="([^"]+)"\]', full_text)
-    for match in hub_matches:
-        space_id, name, icon = match.groups()
-        target_space_id = last_created_space_id if space_id == "PENDING_SPACE" else space_id
-        if target_space_id:
-            res = supabase.table("hubs").insert({"user_id": user_id, "space_id": target_space_id, "name": name, "icon": icon}).execute()
-            if res.data:
-                actions.append({"type": "hub_created", "label": name, "id": res.data[0]["id"], "space_id": target_space_id})
+    for match in tag_pattern.finditer(full_text):
+        tag_type = match.group(1)
+        tag_content = match.group(2)
+        clean_text = clean_text.replace(match.group(0), "").strip()
 
-    # 3. Task Creation
-    task_match = re.search(r'\[CREATE_TASK:\s*title="([^"]+)",\s*priority="([^"]+)",\s*hub_id="([^"]+)"\]', full_text)
-    if task_match:
-        title, priority, hub_id = task_match.groups()
-        res = supabase.table("tasks").insert({"user_id": user_id, "hub_id": hub_id, "title": title, "priority": priority, "status": "todo"}).execute()
-        if res.data:
-            actions.append({"type": "task_created", "label": title, "id": res.data[0]["id"]})
+        if tag_type == "CREATE_TASK":
+            result = await execute_task_action(tag_content, user_id)
+            if result.get("task"):
+                t = result["task"]
+                actions.append({
+                    "type": "task_created",
+                    "label": t.get("title", "Task"),
+                    "priority": t.get("priority", "low"),
+                    "status": t.get("status", "todo"),
+                    "id": t.get("id"),
+                    "hub_id": t.get("hub_id"),
+                })
 
-    # 4. Event Creation
-    event_match = re.search(r'\[CREATE_EVENT:\s*title="([^"]+)",\s*start="([^"]+)",\s*end="([^"]+)",\s*desc="([^"]*)",\s*all_day=(true|false),\s*hub_id="([^"]*)"\]', full_text)
-    if event_match:
-        title, start, end, desc, all_day, h_id = event_match.groups()
-        event_dict = {
-            "user_id": user_id,
-            "title": title,
-            "start_time": start,
-            "end_time": end,
-            "description": desc or None,
-            "is_all_day": all_day == "true",
-            "hub_id": h_id if h_id and h_id != "null" else None
-        }
-        res_e = supabase.table("events").insert(event_dict).execute()
-        if res_e.data:
-            actions.append({"type": "event_created", "label": title, "id": res_e.data[0]["id"]})
+        elif tag_type == "UPDATE_TASK":
+            params = {}
+            for m in re.finditer(r'(\w+)="([^"]*)"', tag_content):
+                params[m.group(1)] = m.group(2)
+            if params.get("id"):
+                updates = {k: v for k, v in params.items() if k != "id"}
+                supabase.table("tasks").update(updates).eq("id", params["id"]).execute()
+                actions.append({"type": "task_updated", "id": params["id"], **updates})
 
-    # 5. Quiz Saving (Look for [QUIZ_DATA]...[/QUIZ_DATA])
-    quiz_match = re.search(r'\[QUIZ_DATA\](.*?)\[/QUIZ_DATA\]', full_text, re.DOTALL)
-    if quiz_match:
-        try:
-            quiz_json = json.loads(quiz_match.group(1).strip())
-            # Use 'New Quiz' as default title
-            res_q = supabase.table("kalay_quizzes").insert({"user_id": user_id, "session_id": session_id, "title": "New Quiz"}).execute()
-            if res_q.data:
-                q_id = res_q.data[0]["id"]
-                for q in quiz_json:
-                    supabase.table("kalay_quiz_questions").insert({
-                        "quiz_id": q_id,
-                        "type": q.get("type", "multiple_choice"),
-                        "question": q.get("question", ""),
-                        "options": q.get("options", []),
-                        "correct_answer": str(q.get("correct_answer", "")),
-                        "explanation": q.get("explanation", "")
-                    }).execute()
-                actions.append({"type": "quiz_generated", "label": "New Quiz Engine", "id": q_id})
-        except Exception as e:
-            print(f"Quiz save error: {e}")
-    clean_reply = re.sub(r'\[(?:CREATE_TASK|GENERATE_REPORT|CREATE_SPACE|CREATE_HUB|CREATE_EVENT|QUIZ_DATA|/QUIZ_DATA):.*?\]', '', full_text).strip()
-    return clean_reply, actions
+        elif tag_type == "CREATE_EVENT":
+            params = {}
+            for m in re.finditer(r'(\w+)="([^"]*)"', tag_content):
+                params[m.group(1)] = m.group(2)
+            actions.append({"type": "event_created", **params})
+
+        elif tag_type == "SAVE_REPORT":
+            params = {}
+            for m in re.finditer(r'(\w+)="([^"]*)"', tag_content):
+                params[m.group(1)] = m.group(2)
+            report_content = full_text.split("[SAVE_REPORT")[0].strip()
+            supabase.table("kalay_outputs").insert({
+                "user_id": user_id,
+                "session_id": session_id,
+                "type": params.get("type", "report"),
+                "title": params.get("title", "Untitled"),
+                "content": report_content,
+                "space_ids": space_ids,
+                "hub_ids": hub_ids,
+            }).execute()
+            actions.append({
+                "type": "report_saved",
+                "label": params.get("title", "Report"),
+                "output_type": params.get("type", "report"),
+            })
+
+    return clean_text, actions
