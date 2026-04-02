@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from database import supabase
-from services.ai import get_ai_response
+from services.ai import get_ai_response_async
 import json
 
 router = APIRouter(prefix="/automate", tags=["automate"])
@@ -63,7 +63,7 @@ Be concise. Do not use emojis."""
 
     # 3. Call AI
     try:
-        ai_summary = get_ai_response(system_prompt, user_prompt)
+        ai_summary = await get_ai_response_async(system_prompt, user_prompt)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI synthesis failed: {str(e)}")
 

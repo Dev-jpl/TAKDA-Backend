@@ -59,6 +59,50 @@ def get_ai_response(system: str, user: str) -> str:
     return response.choices[0].message.content
 
 
+async def get_ai_response_async(system: str, user: str) -> str:
+    provider = AI_PROVIDER
+
+    if provider == "anthropic":
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        response = await client.messages.create(
+            model=MODELS["anthropic"],
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return response.content[0].text
+
+    from openai import AsyncOpenAI
+    if provider == "ollama":
+        client = AsyncOpenAI(
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+            api_key="ollama",
+        )
+    elif provider == "groq":
+        client = AsyncOpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+    elif provider == "openrouter":
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+        )
+    else:
+        raise ValueError(f"Unknown AI_PROVIDER: '{provider}'.")
+
+    response = await client.chat.completions.create(
+        model=MODELS[provider],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        max_tokens=1024,
+    )
+    return response.choices[0].message.content
+
+
 async def search_chunks(
     query: str,
     user_id: str,
@@ -85,17 +129,6 @@ async def search_chunks(
             query_obj = query_obj.in_("document_id", document_ids)
         result = query_obj.execute()
         chunks = result.data or []
-
-    # Filter by hub_id or space_id if provided — join through documents table
-    if (hub_id or space_id) and chunks:
-        query = supabase.table("documents").select("id")
-        if hub_id:
-            query = query.eq("hub_id", hub_id)
-        elif space_id:
-            query = query.eq("space_id", space_id)
-        
-        doc_ids = [d["id"] for d in query.execute().data]
-        chunks = [c for c in chunks if c.get("document_id") in doc_ids]
 
     return chunks
 
@@ -139,3 +172,55 @@ Answer with citations:"""
 
     answer = get_ai_response(system, user_prompt)
     return {"answer": answer, "citations": citations}
+
+
+async def get_streaming_ai_response(system: str, user: str):
+    provider = os.getenv("AI_PROVIDER", "ollama")
+
+    if provider == "anthropic":
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        async with client.messages.stream(
+            model=MODELS["anthropic"],
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        ) as stream:
+            async for event in stream:
+                if event.type == "content_block_delta":
+                    yield event.delta.text
+        return
+
+    # OpenAI-compatible (ollama, groq, openrouter)
+    from openai import AsyncOpenAI
+
+    if provider == "ollama":
+        client = AsyncOpenAI(
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+            api_key="ollama",
+        )
+    elif provider == "groq":
+        client = AsyncOpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+    elif provider == "openrouter":
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+        )
+    else:
+        raise ValueError(f"Unknown AI_PROVIDER: '{provider}' for streaming.")
+
+    stream = await client.chat.completions.create(
+        model=MODELS[provider],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        max_tokens=1024,
+        stream=True,
+    )
+    async for chunk in stream:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content

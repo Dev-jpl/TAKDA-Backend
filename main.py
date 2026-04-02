@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from routers import knowledge, spaces, track, hubs, annotate, deliver, automate
+from routers import knowledge, spaces, track, hubs, annotate, deliver, automate, kalay, events
 
 load_dotenv()
 
@@ -21,7 +21,8 @@ app.include_router(knowledge.router)
 app.include_router(track.router)
 app.include_router(annotate.router)
 app.include_router(deliver.router)
-app.include_router(automate.router)
+app.include_router(events.router)
+app.include_router(kalay.router)
 
 @app.get("/")
 def root():

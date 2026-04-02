@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header, Form, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -36,6 +36,7 @@ class DocumentCreate(BaseModel):
 # --- Upload PDF ---
 @router.post("/upload/pdf")
 async def upload_pdf(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: str = Form(...),
     hub_id: Optional[str] = Form(None),
@@ -64,18 +65,20 @@ async def upload_pdf(
 
     document_id = doc.data[0]["id"]
 
-    await process_document(document_id, text)
+    # Process embeddings in background to avoid timeouts
+    background_tasks.add_task(process_document, document_id, text)
 
     return {
         "document_id": document_id,
         "title": file.filename,
-        "chunks_processed": True,
+        "processing": True,
+        "message": "Project indexing started in background."
     }
 
 
 # --- Upload URL ---
 @router.post("/upload/url")
-async def upload_url(body: URLRequest):
+async def upload_url(body: URLRequest, background_tasks: BackgroundTasks):
     try:
         text, page_title = await extract_url_text(body.url)
     except Exception as e:
@@ -94,12 +97,13 @@ async def upload_url(body: URLRequest):
 
     document_id = doc.data[0]["id"]
 
-    await process_document(document_id, text)
+    background_tasks.add_task(process_document, document_id, text)
 
     return {
         "document_id": document_id,
         "title": title,
-        "chunks_processed": True,
+        "processing": True,
+        "message": "Resource indexing started in background."
     }
 
 
@@ -159,11 +163,36 @@ async def delete_document(document_id: str):
 # --- AI Chat ---
 @router.post("/chat")
 async def chat(body: ChatRequest):
+    # Fetch document IDs for the hub if space is scoped
+    doc_ids = body.document_ids or []
+    
+    if not doc_ids and body.hub_id:
+        hubs_res = supabase.table("documents") \
+            .select("id") \
+            .eq("hub_id", body.hub_id) \
+            .execute()
+        doc_ids = [d["id"] for d in hubs_res.data]
+        
+    if not doc_ids and not body.hub_id:
+        # Fallback for old global-space documents
+        global_res = supabase.table("documents") \
+            .select("id") \
+            .eq("user_id", body.user_id) \
+            .is_("hub_id", "null") \
+            .execute()
+        doc_ids = [d["id"] for d in global_res.data]
+
+    if not doc_ids:
+        return {
+            "answer": "No relevant documents found. Please upload a source to this Hub or Space first.",
+            "citations": [],
+        }
+
     response = await chat_with_documents(
         query=body.query,
         user_id=body.user_id,
         hub_id=body.hub_id,
-        document_ids=body.document_ids,
+        document_ids=doc_ids,
     )
     return response
 
