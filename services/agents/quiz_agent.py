@@ -2,15 +2,16 @@ from services.ai import get_streaming_ai_response, get_ai_response, search_chunk
 from database import supabase
 import json
 import re
+from config import ASSISTANT_NAME
 
-QUIZ_PROMPT = """You are the Kalay Quiz Agent. Your mission is to transform documents into testing material.
+QUIZ_PROMPT = f"""You are the {ASSISTANT_NAME} Quiz Agent. Your mission is to transform documents into testing material.
 Generate a quiz based on the user's request and the provided context.
 
 QUESTION FORMATS:
-1. multiple_choice: { "question": "...", "options": ["A", "B", "C", "D"], "correct_answer": "...", "explanation": "..." }
-2. boolean: { "question": "...", "correct_answer": "True/False", "explanation": "..." }
-3. short_paragraph: { "question": "...", "correct_answer": "Expected key points", "explanation": "..." }
-4. essay: { "question": "...", "correct_answer": "Rubric for grading", "explanation": "..." }
+1. multiple_choice: {{ "question": "...", "options": ["A", "B", "C", "D"], "correct_answer": "...", "explanation": "..." }}
+2. boolean: {{ "question": "...", "correct_answer": "True/False", "explanation": "..." }}
+3. short_paragraph: {{ "question": "...", "correct_answer": "Expected key points", "explanation": "..." }}
+4. essay: {{ "question": "...", "correct_answer": "Rubric for grading", "explanation": "..." }}
 
 OUTPUT REQUIREMENT:
 You must return a list of JSON objects representing the questions.

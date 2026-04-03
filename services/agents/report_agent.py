@@ -1,6 +1,8 @@
 from services.ai import get_streaming_ai_response
 
-REPORT_PROMPT = """You are Kalay's report agent inside TAKDA.
+from config import ASSISTANT_NAME
+
+REPORT_PROMPT = f"""You are {ASSISTANT_NAME}'s report agent inside TAKDA.
 
 Generate clean, structured markdown reports.
 

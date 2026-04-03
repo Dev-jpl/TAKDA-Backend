@@ -11,3 +11,5 @@ beautifulsoup4
 tiktoken
 numpy
 fastembed
+google-generativeai
+google-genai

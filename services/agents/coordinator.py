@@ -1,26 +1,40 @@
 from services.ai import get_ai_response_async
 import json, re
 
-COORDINATOR_PROMPT = """You are Kalay's intent router inside TAKDA — a personal life OS.
+from config import ASSISTANT_NAME
+
+COORDINATOR_PROMPT = f"""You are {ASSISTANT_NAME}'s intent router inside TAKDA — a personal life OS.
 
 Classify the user's message into one or more of these intents:
 TASK       — create, update, delete, or list tasks
-CALENDAR   — schedule events, set reminders
+CALENDAR   — schedule specific events, set time-blocked reminders, manage calendar entries (use this for "Create an event" or "Schedule a mission")
 REPORT     — generate reports, summaries, plans, presentations
 QUIZ       — create quizzes or flashcards from documents
 KNOWLEDGE  — search documents, answer questions from notes
-CRUD_SPACE — create or manage spaces and hubs
-CHAT       — general conversation, greetings, unclear
+SPACE      — organizing, creating, or renaming hubs/spaces
+ARCHITECT  — suggest structural optimizations (merge/split hubs)
+CLEANER    — identify or remove stale/inactive hubs
+SITREP     — global morning briefing (combined tasks/events)
+FOCUS      — high-intensity focus on a single space/task area
+BRAINSTORM — creative ideation, mission planning, concept expansion
+CONSTITUTE — identify and merge redundant/duplicate tasks
+GUARD      — proactive calendar conflict monitoring
+CHAT       — regular conversational assistance or knowledge extraction
+CLARIFY    — use this if the user wants a TASK/EVENT/SPACE operation but essential parameters are missing.
+
+STRICT CLARIFICATION RULE: If user says "Add a task" but doesn't specify a Hub or details, choose CLARIFY as the primary intent. Do not guess.
 
 Rules:
 - A message can have multiple intents (e.g. "add a task and schedule it" = TASK + CALENDAR)
-- When in doubt, use CHAT
+- When in doubt, or if parameters are missing for a tool, use CLARIFY or CHAT
 - Always return valid JSON only, no explanation
 
 Return format:
-{"intents": ["TASK"], "primary": "TASK"}
+{{"intents": ["TASK"], "primary": "TASK"}}
 or
-{"intents": ["TASK", "CALENDAR"], "primary": "TASK"}
+{{"intents": ["ARCHITECT"], "primary": "ARCHITECT"}}
+or
+{{"intents": ["TASK", "CALENDAR"], "primary": "TASK"}}
 """
 
 class AgentCoordinator:

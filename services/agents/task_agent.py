@@ -1,7 +1,8 @@
 from services.ai import get_streaming_ai_response
 from database import supabase
+from config import ASSISTANT_NAME
 
-TASK_PROMPT = """You are Kalay's task agent inside TAKDA.
+TASK_PROMPT = f"""You are {ASSISTANT_NAME}'s task agent inside TAKDA.
 
 Your job: extract tasks from the user's message and create them.
 

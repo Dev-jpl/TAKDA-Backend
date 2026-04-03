@@ -2,10 +2,11 @@ import os
 from database import supabase
 from services.embeddings import embed_query
 
-AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama")  # ollama | groq | openrouter | anthropic
+AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini")  # gemini | ollama | groq | openrouter | anthropic
 
 # --- Per-provider model defaults (override any via .env) ---
 MODELS = {
+    "gemini":      os.getenv("GEMINI_MODEL",      "gemini-1.5-flash"),
     "ollama":      os.getenv("OLLAMA_MODEL",      "llama3.2"),
     "groq":        os.getenv("GROQ_MODEL",         "llama-3.1-8b-instant"),
     "openrouter":  os.getenv("OPENROUTER_MODEL",   "meta-llama/llama-3.2-3b-instruct:free"),
@@ -15,6 +16,13 @@ MODELS = {
 
 def get_ai_response(system: str, user: str) -> str:
     provider = AI_PROVIDER
+
+    if provider == "gemini":
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel(MODELS["gemini"])
+        response = model.generate_content(f"{system}\n\n{user}")
+        return response.text
 
     if provider == "anthropic":
         import anthropic
@@ -61,6 +69,14 @@ def get_ai_response(system: str, user: str) -> str:
 
 async def get_ai_response_async(system: str, user: str) -> str:
     provider = AI_PROVIDER
+
+    if provider == "gemini":
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel(MODELS["gemini"])
+        # Standard async generate_content
+        response = await model.generate_content_async(f"{system}\n\n{user}")
+        return response.text
 
     if provider == "anthropic":
         import anthropic
@@ -175,7 +191,20 @@ Answer with citations:"""
 
 
 async def get_streaming_ai_response(system: str, user: str):
-    provider = os.getenv("AI_PROVIDER", "ollama")
+    provider = os.getenv("AI_PROVIDER", "gemini")
+
+    if provider == "gemini":
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel(
+            model_name=MODELS["gemini"],
+            system_instruction=system
+        )
+        response = await model.generate_content_async(user, stream=True)
+        async for chunk in response:
+            if chunk.text:
+                yield chunk.text
+        return
 
     if provider == "anthropic":
         import anthropic

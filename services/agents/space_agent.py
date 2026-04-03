@@ -12,7 +12,9 @@ ALLOWED_ICONS = [
     "Headphones", "FilmSlate", "ShoppingCart", "Wrench", "Microscope"
 ]
 
-SPACE_AGENT_PROMPT = f"""You are the Kalay Space & Hub Manager. Your job is to organize the TAKDA environment.
+from config import ASSISTANT_NAME
+
+SPACE_AGENT_PROMPT = f"""You are the {ASSISTANT_NAME} Space & Hub Manager. Your job is to organize the TAKDA environment.
 You can propose the creation of new Spaces and Hubs.
 
 CAPABILITIES:
