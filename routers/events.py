@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from database import supabase
+from services.google_calendar_service import google_calendar_service
 import uuid
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -39,25 +40,36 @@ async def get_events(user_id: str, hub_id: Optional[str] = None):
     res = query.order("start_time", desc=False).execute()
     return res.data
 
-from services.google_calendar_service import google_calendar_service
+def to_dict(model: BaseModel, exclude_unset: bool = False):
+    """Helper to convert Pydantic model to dict with ISO strings for datetimes."""
+    d = model.dict(exclude_unset=exclude_unset)
+    for k, v in d.items():
+        if isinstance(v, datetime):
+            d[k] = v.isoformat().replace('+00:00', 'Z')
+    return d
 
 @router.post("/")
 async def create_event(event: EventCreate):
     # Check if user has Google integration
     google_event_id = None
+    event_dict = to_dict(event)
+    
     if google_calendar_service.is_connected(event.user_id):
         try:
             google_event_id = google_calendar_service.create_calendar_event(
                 event.user_id, 
-                event.dict()
+                event_dict
             )
             if google_event_id:
-                event.metadata["google_event_id"] = google_event_id
-                event.metadata["source"] = "takda_synced"
+                # Update event_dict with google metadata
+                if not event_dict.get("metadata"):
+                    event_dict["metadata"] = {}
+                event_dict["metadata"]["google_event_id"] = google_event_id
+                event_dict["metadata"]["source"] = "takda_synced"
         except Exception as e:
             print(f"Failed to push to Google Calendar: {e}")
 
-    res = supabase.table("events").insert(event.dict()).execute()
+    res = supabase.table("events").insert(event_dict).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to create event")
     return res.data[0]
@@ -72,6 +84,8 @@ async def update_event(event_id: str, event: EventUpdate):
     current_event = existing.data[0]
     user_id = current_event["user_id"]
     google_event_id = (current_event.get("metadata") or {}).get("google_event_id")
+    
+    update_dict = to_dict(event, exclude_unset=True)
 
     # Update on Google if exists
     if google_event_id and google_calendar_service.is_connected(user_id):
@@ -79,12 +93,12 @@ async def update_event(event_id: str, event: EventUpdate):
             google_calendar_service.update_calendar_event(
                 user_id, 
                 google_event_id, 
-                event.dict(exclude_unset=True)
+                update_dict
             )
         except Exception as e:
             print(f"Failed to update Google Calendar: {e}")
 
-    res = supabase.table("events").update(event.dict(exclude_unset=True)).eq("id", event_id).execute()
+    res = supabase.table("events").update(update_dict).eq("id", event_id).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to update event")
     return res.data[0]
