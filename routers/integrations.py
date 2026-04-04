@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from services.google_auth_service import google_auth_service
@@ -32,8 +33,8 @@ async def google_callback(
     google_auth_service.exchange_code(code, state)
     
     # After successful exchange, redirect back to the frontend settings page
-    frontend_url = "http://localhost:3000/settings?integration=google&status=success"
-    return RedirectResponse(url=frontend_url)
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(url=f"{frontend_url}/settings?integration=google&status=success")
 
 @router.post("/google/sync")
 async def sync_google_calendar(user_id: str):
