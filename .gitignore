@@ -155,4 +155,5 @@ logs/
 fastapi-*.json
 
 # Uvicorn
-uvicorn-*.log
+# FastEmbed
+model_cache/
