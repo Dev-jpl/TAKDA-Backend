@@ -53,8 +53,12 @@ class GoogleAuthService:
         verifier = getattr(flow, 'code_verifier', None)
         state = f"{user_id}:{verifier}" if verifier else user_id
         
+        # URL-encode the state for safe transmission
+        import urllib.parse
+        encoded_state = urllib.parse.quote(state)
+        
         # Replace the placeholder in the URL
-        authorization_url = authorization_url.replace('state=STATE_PLACEHOLDER', f'state={state}')
+        authorization_url = authorization_url.replace('state=STATE_PLACEHOLDER', f'state={encoded_state}')
         
         return authorization_url, state
 
