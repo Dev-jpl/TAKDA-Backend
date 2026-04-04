@@ -5,7 +5,79 @@ from typing import List, Dict, Any, Optional
 import datetime
 
 class GoogleCalendarService:
-    def get_calendar_events(self, user_id: str, max_results: int = 50) -> List[Dict[str, Any]]:
+    def is_connected(self, user_id: str) -> bool:
+        """Checks if the user has an active Google integration."""
+        creds = google_auth_service.get_credentials(user_id)
+        return creds is not None
+
+    def create_calendar_event(self, user_id: str, event_data: Dict[str, Any]) -> Optional[str]:
+        """Creates an event in the user's primary Google Calendar."""
+        creds = google_auth_service.get_credentials(user_id)
+        if not creds:
+            return None
+
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # Prepare Google event structure
+        g_event = {
+            'summary': event_data.get('title'),
+            'location': event_data.get('location', ''),
+            'description': event_data.get('description', ''),
+            'start': {
+                'dateTime': event_data.get('start_time'),
+                'timeZone': 'UTC',
+            },
+            'end': {
+                'dateTime': event_data.get('end_time'),
+                'timeZone': 'UTC',
+            },
+        }
+
+        created_event = service.events().insert(calendarId='primary', body=g_event).execute()
+        return created_event.get('id')
+
+    def update_calendar_event(self, user_id: str, google_event_id: str, event_data: Dict[str, Any]) -> bool:
+        """Updates an existing event in the user's Google Calendar."""
+        creds = google_auth_service.get_credentials(user_id)
+        if not creds:
+            return False
+
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # Get existing event first to maintain consistency
+        try:
+            g_event = service.events().get(calendarId='primary', eventId=google_event_id).execute()
+            
+            g_event['summary'] = event_data.get('title', g_event['summary'])
+            g_event['description'] = event_data.get('description', g_event['description'])
+            g_event['location'] = event_data.get('location', g_event['location'])
+            
+            if 'start_time' in event_data:
+                g_event['start']['dateTime'] = event_data['start_time']
+            if 'end_time' in event_data:
+                g_event['end']['dateTime'] = event_data['end_time']
+
+            service.events().update(calendarId='primary', eventId=google_event_id, body=g_event).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating Google event: {e}")
+            return False
+
+    def delete_calendar_event(self, user_id: str, google_event_id: str) -> bool:
+        """Deletes an event from the user's Google Calendar."""
+        creds = google_auth_service.get_credentials(user_id)
+        if not creds:
+            return False
+
+        service = build('calendar', 'v3', credentials=creds)
+        try:
+            service.events().delete(calendarId='primary', eventId=google_event_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting Google event: {e}")
+            return False
+
+    def sync_events(self, user_id: str) -> List[Dict[str, Any]]:
         """Fetches events from the user's primary Google Calendar."""
         creds = google_auth_service.get_credentials(user_id)
         if not creds:

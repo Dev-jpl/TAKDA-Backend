@@ -29,11 +29,30 @@ async def google_callback(
     # state is the UUID id from our oauth_states table
     print(f"[Google Auth] Callback received state ID: {state}")
     
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state.")
+        
+    # Safety check: if state has a colon, it's the OLD format and will cause a UUID crash
+    if ":" in state:
+        raise HTTPException(
+            status_code=400, 
+            detail="You are using an outdated authorization session. Please refresh the Settings page and try adding Google Calendar again."
+        )
+    
     from database import supabase
-    state_result = supabase.table("oauth_states").select("*").eq("id", state).execute()
+    try:
+        state_result = supabase.table("oauth_states").select("*").eq("id", state).execute()
+    except Exception as e:
+        # Catch UUID syntax errors from Postgres
+        if "invalid input syntax for type uuid" in str(e).lower():
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid session ID. Please restart the Google connection flow."
+            )
+        raise e
     
     if not state_result.data:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state or session expired.")
+        raise HTTPException(status_code=400, detail="Invalid OAuth state or session expired. Please try connecting again.")
     
     state_data = state_result.data[0]
     user_id = state_data["user_id"]
