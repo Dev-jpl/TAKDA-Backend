@@ -6,7 +6,8 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini")  # gemini | ollama | groq | ope
 
 # --- Per-provider model defaults (override any via .env) ---
 MODELS = {
-    "gemini":      os.getenv("GEMINI_MODEL",      "gemini-1.5-flash"),
+    # "gemini":      os.getenv("GEMINI_MODEL",      "gemini-1.5-flash"),
+    "gemini":      os.getenv("GEMINI_MODEL",      "gemini-3.1-flash-lite-preview"),
     "ollama":      os.getenv("OLLAMA_MODEL",      "llama3.2"),
     "groq":        os.getenv("GROQ_MODEL",         "llama-3.1-8b-instant"),
     "openrouter":  os.getenv("OPENROUTER_MODEL",   "meta-llama/llama-3.2-3b-instruct:free"),
