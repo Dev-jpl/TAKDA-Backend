@@ -27,10 +27,13 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code.")
     
     # state is packed as "user_id:code_verifier"
+    print(f"[Google Auth] Callback received state: {state}")
     user_id = state
     code_verifier = None
-    if ":" in state:
+    if state and ":" in state:
         user_id, code_verifier = state.split(":", 1)
+    
+    print(f"[Google Auth] Unpacked user_id: {user_id}, code_verifier: {'PRESENT' if code_verifier else 'NONE'}")
     
     # Exchange code for tokens
     google_auth_service.exchange_code(code, user_id, code_verifier)

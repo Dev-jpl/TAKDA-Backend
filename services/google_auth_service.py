@@ -60,11 +60,13 @@ class GoogleAuthService:
         # Replace the placeholder in the URL
         authorization_url = authorization_url.replace('state=STATE_PLACEHOLDER', f'state={encoded_state}')
         
+        print(f"[Google Auth] Generated auth URL with state: {state}")
         return authorization_url, state
 
     @staticmethod
     def exchange_code(code: str, user_id: str, code_verifier: str = None):
         """Exchanges authorization code for tokens and stores them in Supabase."""
+        print(f"[Google Auth] Exchanging code for user: {user_id} with verifier: {'PRESENT' if code_verifier else 'NONE'}")
         flow = GoogleAuthService.get_flow()
         flow.fetch_token(code=code, code_verifier=code_verifier)
         credentials = flow.credentials
