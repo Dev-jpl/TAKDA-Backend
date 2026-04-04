@@ -4,7 +4,10 @@ from database import supabase
 
 # Initialize FastEmbed (Optimized for CPU)
 # This will download the BGE-Small model (384-dims) on first run (~133MB)
-model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+model = TextEmbedding(
+    model_name="BAAI/bge-small-en-v1.5",
+    cache_dir="/app/model_cache"
+)
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50

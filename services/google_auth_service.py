@@ -30,6 +30,7 @@ class GoogleAuthService:
                 "client_secret": os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
             }
         }
+        print(f"[Google Auth] Using Redirect URI: {REDIRECT_URI}")
         return Flow.from_client_config(
             client_config,
             scopes=SCOPES,
@@ -38,30 +39,39 @@ class GoogleAuthService:
 
     @staticmethod
     def get_auth_url(user_id: str):
-        """Generates the Google OAuth authorization URL, including user_id in the state."""
+        """Generates the Google OAuth authorization URL and stores state in DB."""
         flow = GoogleAuthService.get_flow()
-        # Generate authorization URL. We call it once to trigger PKCE generation if enabled.
-        # We use a placeholder for state and then replace it with our packed state.
-        authorization_url, _ = flow.authorization_url(
+        # Generate the URL with a random internal state (handled by the library first)
+        authorization_url, library_state = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
-            prompt='consent',
-            state='STATE_PLACEHOLDER'
+            prompt='consent'
         )
         
-        # Now that flow.code_verifier is populated (if PKCE is used), we pack it.
+        # We use flow.code_verifier which was just generated
         verifier = getattr(flow, 'code_verifier', None)
-        state = f"{user_id}:{verifier}" if verifier else user_id
         
-        # URL-encode the state for safe transmission
+        # Store in our temporary oauth_states table
+        from database import supabase
+        result = supabase.table("oauth_states").insert({
+            "user_id": user_id,
+            "code_verifier": verifier
+        }).execute()
+        
+        # The record ID will be our 'state' sent to Google
+        state_id = result.data[0]["id"]
+        
+        # Replace the library's state with our DB record ID
         import urllib.parse
-        encoded_state = urllib.parse.quote(state)
+        parsed = urllib.parse.urlparse(authorization_url)
+        params = urllib.parse.parse_qs(parsed.query)
+        params['state'] = [state_id]
         
-        # Replace the placeholder in the URL
-        authorization_url = authorization_url.replace('state=STATE_PLACEHOLDER', f'state={encoded_state}')
+        new_query = urllib.parse.urlencode(params, doseq=True)
+        authorization_url = parsed._replace(query=new_query).geturl()
         
-        print(f"[Google Auth] Generated auth URL with state: {state}")
-        return authorization_url, state
+        print(f"[Google Auth] Generated auth URL with DB state ID: {state_id}")
+        return authorization_url, state_id
 
     @staticmethod
     def exchange_code(code: str, user_id: str, code_verifier: str = None):

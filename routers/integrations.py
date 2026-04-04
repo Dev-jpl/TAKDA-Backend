@@ -26,17 +26,26 @@ async def google_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code.")
     
-    # state is packed as "user_id:code_verifier"
-    print(f"[Google Auth] Callback received state: {state}")
-    user_id = state
-    code_verifier = None
-    if state and ":" in state:
-        user_id, code_verifier = state.split(":", 1)
+    # state is the UUID id from our oauth_states table
+    print(f"[Google Auth] Callback received state ID: {state}")
     
-    print(f"[Google Auth] Unpacked user_id: {user_id}, code_verifier: {'PRESENT' if code_verifier else 'NONE'}")
+    from database import supabase
+    state_result = supabase.table("oauth_states").select("*").eq("id", state).execute()
+    
+    if not state_result.data:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state or session expired.")
+    
+    state_data = state_result.data[0]
+    user_id = state_data["user_id"]
+    code_verifier = state_data["code_verifier"]
+    
+    print(f"[Google Auth] Recovered user_id: {user_id} and code_verifier from DB")
     
     # Exchange code for tokens
     google_auth_service.exchange_code(code, user_id, code_verifier)
+    
+    # Cleanup state
+    supabase.table("oauth_states").delete().eq("id", state).execute()
     
     # After successful exchange, redirect back to the frontend settings page
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
