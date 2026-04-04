@@ -15,8 +15,8 @@ async def google_auth(user_id: str):
 
 @router.get("/google/callback")
 async def google_callback(
-    code: str, 
-    state: Optional[str] = None, # user_id passed via state
+    code: Optional[str] = None, 
+    state: Optional[str] = None, 
     error: Optional[str] = None
 ):
     """Handles the Google OAuth callback."""
