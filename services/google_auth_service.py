@@ -40,19 +40,29 @@ class GoogleAuthService:
     def get_auth_url(user_id: str):
         """Generates the Google OAuth authorization URL, including user_id in the state."""
         flow = GoogleAuthService.get_flow()
-        authorization_url, state = flow.authorization_url(
+        # Generate authorization URL. We call it once to trigger PKCE generation if enabled.
+        # We use a placeholder for state and then replace it with our packed state.
+        authorization_url, _ = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
             prompt='consent',
-            state=user_id # Encode user_id as state
+            state='STATE_PLACEHOLDER'
         )
+        
+        # Now that flow.code_verifier is populated (if PKCE is used), we pack it.
+        verifier = getattr(flow, 'code_verifier', None)
+        state = f"{user_id}:{verifier}" if verifier else user_id
+        
+        # Replace the placeholder in the URL
+        authorization_url = authorization_url.replace('state=STATE_PLACEHOLDER', f'state={state}')
+        
         return authorization_url, state
 
     @staticmethod
-    def exchange_code(code: str, user_id: str):
+    def exchange_code(code: str, user_id: str, code_verifier: str = None):
         """Exchanges authorization code for tokens and stores them in Supabase."""
         flow = GoogleAuthService.get_flow()
-        flow.fetch_token(code=code)
+        flow.fetch_token(code=code, code_verifier=code_verifier)
         credentials = flow.credentials
 
         # Store tokens in Supabase

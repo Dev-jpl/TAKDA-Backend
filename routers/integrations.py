@@ -26,11 +26,14 @@ async def google_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code.")
     
-    if not state:
-        raise HTTPException(status_code=400, detail="Missing state (user_id).")
+    # state is packed as "user_id:code_verifier"
+    user_id = state
+    code_verifier = None
+    if ":" in state:
+        user_id, code_verifier = state.split(":", 1)
     
     # Exchange code for tokens
-    google_auth_service.exchange_code(code, state)
+    google_auth_service.exchange_code(code, user_id, code_verifier)
     
     # After successful exchange, redirect back to the frontend settings page
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
