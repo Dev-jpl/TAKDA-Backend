@@ -77,25 +77,27 @@ class GoogleCalendarService:
             print(f"Error deleting Google event: {e}")
             return False
 
-    def sync_events(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_calendar_events(self, user_id: str, max_results: int = 50) -> List[Dict[str, Any]]:
         """Fetches events from the user's primary Google Calendar."""
         creds = google_auth_service.get_credentials(user_id)
         if not creds:
             return []
 
         service = build('calendar', 'v3', credentials=creds)
-        now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
         
-        events_result = service.events().list(
-            calendarId='primary', 
-            timeMin=now,
-            maxResults=max_results, 
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        
-        events = events_result.get('items', [])
-        return events
+        try:
+            events_result = service.events().list(
+                calendarId='primary', 
+                timeMin=now,
+                maxResults=max_results, 
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+            return events_result.get('items', [])
+        except Exception as e:
+            print(f"Error fetching Google events: {e}")
+            return []
 
     def sync_events(self, user_id: str) -> List[Dict[str, Any]]:
         """Syncs Google Calendar events to the local Takda events table."""
@@ -123,21 +125,22 @@ class GoogleCalendarService:
             }
 
             # Upsert based on google_event_id in metadata
-            # Note: We might need a proper column for source_id or just use metadata filtering
-            # For simplicity, we'll try to find an existing event with this google_event_id
-            existing = supabase.table("events")\
-                .select("id")\
-                .eq("user_id", user_id)\
-                .filter("metadata->>google_event_id", "eq", g_event['id'])\
-                .execute()
+            try:
+                existing = supabase.table("events")\
+                    .select("id")\
+                    .eq("user_id", user_id)\
+                    .filter("metadata->>google_event_id", "eq", g_event['id'])\
+                    .execute()
 
-            if existing.data:
-                res = supabase.table("events").update(event_data).eq("id", existing.data[0]['id']).execute()
-            else:
-                res = supabase.table("events").insert(event_data).execute()
-            
-            if res.data:
-                synced_ids.append(res.data[0]['id'])
+                if existing.data:
+                    res = supabase.table("events").update(event_data).eq("id", existing.data[0]['id']).execute()
+                else:
+                    res = supabase.table("events").insert(event_data).execute()
+                
+                if res.data:
+                    synced_ids.append(res.data[0]['id'])
+            except Exception as e:
+                print(f"Error syncing individual event {g_event.get('summary')}: {e}")
 
         return synced_ids
 
