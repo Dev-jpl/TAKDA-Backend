@@ -24,11 +24,11 @@ class GoogleCalendarService:
             'location': event_data.get('location', ''),
             'description': event_data.get('description', ''),
             'start': {
-                'dateTime': event_data.get('start_time'),
+                'dateTime': event_data.get('start_at'),
                 'timeZone': 'UTC',
             },
             'end': {
-                'dateTime': event_data.get('end_time'),
+                'dateTime': event_data.get('end_at'),
                 'timeZone': 'UTC',
             },
         }
@@ -52,10 +52,10 @@ class GoogleCalendarService:
             g_event['description'] = event_data.get('description', g_event['description'])
             g_event['location'] = event_data.get('location', g_event['location'])
             
-            if 'start_time' in event_data:
-                g_event['start']['dateTime'] = event_data['start_time']
-            if 'end_time' in event_data:
-                g_event['end']['dateTime'] = event_data['end_time']
+            if 'start_at' in event_data:
+                g_event['start']['dateTime'] = event_data['start_at']
+            if 'end_at' in event_data:
+                g_event['end']['dateTime'] = event_data['end_at']
 
             service.events().update(calendarId='primary', eventId=google_event_id, body=g_event).execute()
             return True
@@ -114,8 +114,8 @@ class GoogleCalendarService:
                 "title": g_event.get('summary', 'Untitled Event'),
                 "description": g_event.get('description', ''),
                 "location": g_event.get('location', ''),
-                "start_time": start,
-                "end_time": end,
+                "start_at": start,
+                "end_at": end,
                 "metadata": {
                     "source": "google_calendar",
                     "google_event_id": g_event['id'],

@@ -23,6 +23,7 @@ app.include_router(annotate.router)
 app.include_router(deliver.router)
 app.include_router(events.router)
 app.include_router(integrations.router)
+app.include_router(automate.router)
 app.include_router(coordinator.router, prefix="/coordinator")
 
 @app.get("/")

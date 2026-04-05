@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from database import supabase
 
 router = APIRouter(prefix="/annotate", tags=["annotate"])
@@ -10,7 +10,7 @@ class AnnotationCreate(BaseModel):
     user_id: str
     document_id: Optional[str] = None
     content: str
-    category: str  # idea | reference | action
+    category: Literal['idea', 'reference', 'action', 'reflection', 'insight', 'objective', 'note']
 
 class AnnotationUpdate(BaseModel):
     content: Optional[str] = None

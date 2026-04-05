@@ -11,9 +11,12 @@ router = APIRouter(prefix="/events", tags=["events"])
 class EventBase(BaseModel):
     title: str
     description: Optional[str] = None
-    start_time: datetime
-    end_time: datetime
+    people: Optional[str] = None
+    location: Optional[str] = None
+    start_at: datetime
+    end_at: datetime
     is_all_day: bool = False
+    calendar_id: Optional[str] = None
     hub_id: Optional[str] = None
     color: Optional[str] = None
     metadata: Optional[dict] = {}
@@ -22,22 +25,25 @@ class EventCreate(EventBase):
     user_id: str
 
 class EventUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    people: Optional[str] = None
+    location: Optional[str] = None
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
     is_all_day: Optional[bool] = None
+    calendar_id: Optional[str] = None
     hub_id: Optional[str] = None
     color: Optional[str] = None
     metadata: Optional[dict] = None
 
 @router.get("/")
-async def get_events(user_id: str, hub_id: Optional[str] = None):
+async def get_events(user_id: str, hub_id: Optional[str] = None, calendar_id: Optional[str] = None):
     query = supabase.table("events").select("*").eq("user_id", user_id)
     if hub_id:
         query = query.eq("hub_id", hub_id)
+    if calendar_id:
+        query = query.eq("calendar_id", calendar_id)
     
-    res = query.order("start_time", desc=False).execute()
+    res = query.order("start_at", desc=False).execute()
     return res.data
 
 def to_dict(model: BaseModel, exclude_unset: bool = False):
