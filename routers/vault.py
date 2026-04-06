@@ -16,6 +16,9 @@ class AcceptBody(BaseModel):
     hub_id: str
     module: str = "track"
 
+class VaultItemUpdate(BaseModel):
+    content: str
+
 
 @router.get("/{user_id}")
 async def get_vault_items(user_id: str, status: Optional[str] = None):
@@ -39,6 +42,17 @@ async def create_vault_item(body: VaultItemCreate):
     }).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to create vault item")
+    return res.data[0]
+
+
+@router.patch("/{item_id}")
+async def update_vault_item(item_id: str, body: VaultItemUpdate):
+    res = supabase.table("vault_items").update({
+        "content": body.content,
+        "updated_at": "now()",
+    }).eq("id", item_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Item not found")
     return res.data[0]
 
 
