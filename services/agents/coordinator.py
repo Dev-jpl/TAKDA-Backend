@@ -7,17 +7,17 @@ COORDINATOR_PROMPT = f"""You are {ASSISTANT_NAME}'s intent router inside TAKDA �
 
 Classify the user's message into one or more of these intents:
 TASK       — create, update, delete, or list tasks
-CALENDAR   — schedule specific events, set time-blocked reminders, manage calendar entries (use this for "Create an event" or "Schedule a mission")
+CALENDAR   — schedule specific events, set time-blocked reminders, manage calendar entries (use this for "Create an event" or "Schedule an event")
 REPORT     — generate reports, summaries, plans, presentations
 QUIZ       — create quizzes or flashcards from documents
 KNOWLEDGE  — search documents, answer questions from notes
 SPACE      — organizing, creating, or renaming hubs/spaces
 ARCHITECT  — suggest structural optimizations (merge/split hubs)
 CLEANER    — identify or remove stale/inactive hubs
-SITREP     — global morning briefing (combined tasks/events)
-FOCUS      — high-intensity focus on a single space/task area
-BRAINSTORM — creative ideation, mission planning, concept expansion
-CONSTITUTE — identify and merge redundant/duplicate tasks
+BRIEFING   — daily briefing (combined tasks/events overview)
+FOCUS      — help user focus on priorities
+BRAINSTORM — creative ideation and planning
+CONSTITUTE — identify and merge duplicate tasks
 GUARD      — proactive calendar conflict monitoring
 CHAT       — regular conversational assistance or knowledge extraction
 CLARIFY    — use this if the user wants a TASK/EVENT/SPACE operation but essential parameters are missing.

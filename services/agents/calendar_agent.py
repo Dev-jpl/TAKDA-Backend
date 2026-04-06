@@ -7,9 +7,9 @@ from config import ASSISTANT_NAME
 from services.agents.base import BASE_IDENTITY
 
 CALENDAR_SPECIALIST_PROMPT = f"""{BASE_IDENTITY}
-MISSION: You provide absolute technical clarity on your mission calendar.
+You help the user manage their calendar with clarity and care.
 Skills:
-- [FETCH_CALENDAR: start="ISO" end="ISO"] (Discover existing missions)
+- [FETCH_CALENDAR: start="ISO" end="ISO"] (Fetch existing events)
 - [PROPOSE_CREATE_EVENT: title="Name" start_time="ISO" end_time="ISO" location="Plain Text"]
 - [PROPOSE_UPDATE_EVENT: id="<UUID>" title="New" start_time="ISO"]
 - [PROPOSE_DELETE_EVENT: id="<UUID>"]
@@ -17,7 +17,7 @@ Skills:
 STRATEGY:
 1. If the user asks about their schedule, use [FETCH_CALENDAR].
 2. If the info from FETCH is provided, analyze it and report your findings.
-3. If they propose a new mission, check for conflicts via FETCH first if unsure, then use [PROPOSE_CREATE_EVENT].
+3. If they want to add an event, check for conflicts via FETCH first if unsure, then use [PROPOSE_CREATE_EVENT].
 4. OMIT attributes if values are unknown.
 """
 
@@ -33,10 +33,10 @@ async def run_calendar_logic(user_id: str, message: str, context: dict) -> Async
         events = get_events(user_id, start, end)
         
         if events:
-            context_snippet = "\nEXISTING MISSIONS:\n" + "\n".join([f"- {e['title']} @ {e['start_time']} [id: {e['id']}]" for e in events])
+            context_snippet = "\nEXISTING EVENTS:\n" + "\n".join([f"- {e['title']} @ {e['start_time']} [id: {e['id']}]" for e in events])
             message += context_snippet
         else:
-            message += "\n(No existing missions found for this period.)"
+            message += "\n(No events found for this period.)"
 
     # 2. Main Agent Stream
     async for chunk in get_streaming_ai_response(CALENDAR_SPECIALIST_PROMPT, message):

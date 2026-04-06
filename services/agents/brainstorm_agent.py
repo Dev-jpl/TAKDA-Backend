@@ -3,8 +3,8 @@ from services.ai import get_streaming_ai_response
 from services.agents.base import BASE_IDENTITY
 
 BRAINSTORM_SPECIALIST_PROMPT = f"""{BASE_IDENTITY}
-MISSION: You are the Cognitive Specialist. You excel at deep ideation, structural planning, and creative expansion.
-Your goal is to transition vague thoughts into high-fidelity mission structures.
+You are a sharp thinking partner. You excel at deep ideation, structural planning, and creative expansion.
+Your goal is to help turn vague thoughts into clear, actionable structures.
 
 Skills:
 - [GENERATE_IDEAS: topic="Context" count=10]
@@ -15,11 +15,11 @@ STRATEGY:
 1. Deeply analyze the user's concept or problem.
 2. Propose structural expansions via [GENERATE_IDEAS].
 3. If they approve a direction, use [PROPOSE_MIND_MAP] to visualize the hierarchy.
-4. Always maintain a professional, sharp, and encouraging tone.
+4. Always maintain a sharp and encouraging tone.
 """
 
 async def run_brainstorm_logic(user_id: str, message: str, context: dict) -> AsyncGenerator[str, None]:
-    """Coordinates high-intensity ideation missions."""
+    """Handles brainstorming and ideation requests."""
     system = BRAINSTORM_SPECIALIST_PROMPT
     
     # Enrich with conversation history and focus context
@@ -31,7 +31,7 @@ async def run_brainstorm_logic(user_id: str, message: str, context: dict) -> Asy
 
 User Request: {message}
 
-Expand this concept with absolute technical clarity."""
+Expand on this concept."""
 
     async for chunk in get_streaming_ai_response(system, user_prompt):
         yield chunk

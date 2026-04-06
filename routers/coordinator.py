@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from database import supabase
 from services.coordinator_agent import process_coordinator_chat_stream, parse_and_propose_actions
+from services.aly_memory import extract_and_store_memories
 
 router = APIRouter()
 
@@ -47,7 +48,7 @@ async def chat(body: CoordinatorChatRequest, background_tasks: BackgroundTasks):
         is_new_session = True
         res = supabase.table("coordinator_sessions").insert({
             "user_id": body.user_id,
-            "title": "New Mission"
+            "title": "New chat"
         }).execute()
         session_id = res.data[0]["id"]
 
@@ -75,12 +76,7 @@ async def chat(body: CoordinatorChatRequest, background_tasks: BackgroundTasks):
     ]
 
     # Fetch context for the agent
-    tasks_res = supabase.table("tasks").select("id, title, status").eq("user_id", body.user_id).neq("status", "done").execute()
-    hubs_res = supabase.table("hubs").select("id, name").eq("user_id", body.user_id).execute()
-    context = {
-        "tasks": tasks_res.data or [],
-        "hubs": hubs_res.data or []
-    }
+    context = {}
 
     async def stream_generator():
         full_text = ""
@@ -89,7 +85,10 @@ async def chat(body: CoordinatorChatRequest, background_tasks: BackgroundTasks):
             user_id=body.user_id,
             message=body.message,
             conversation_history=conversation_history,
-            context=context
+            context=context,
+            session_id=session_id,
+            space_ids=body.space_ids,
+            hub_ids=body.hub_ids,
         ):
             full_text += chunk
             yield chunk
@@ -115,6 +114,13 @@ async def chat(body: CoordinatorChatRequest, background_tasks: BackgroundTasks):
         supabase.table("coordinator_sessions").update({
             "updated_at": "now()"
         }).eq("id", session_id).execute()
+
+        # Extract and store memories in background
+        full_convo = conversation_history + [
+            {"role": "user", "content": body.message},
+            {"role": "assistant", "content": clean_reply},
+        ]
+        background_tasks.add_task(extract_and_store_memories, body.user_id, full_convo)
 
         # Auto-generate title for new sessions
         if is_new_session:
@@ -156,7 +162,7 @@ async def execute_proposal(body: dict):
             from services.calendar_service import create_event
             result = create_event(
                 user_id=user_id,
-                title=data.get("title", "Mission Event"),
+                title=data.get("title", "New Event"),
                 start_time=data.get("start_time"),
                 end_time=data.get("end_time"),
                 location=data.get("location")
@@ -177,29 +183,86 @@ async def execute_proposal(body: dict):
                 return {"status": "success"}
 
         elif action_type == "SAVE_REPORT":
-            # Execute the report save mission
             supabase.table("coordinator_outputs").insert({
                 "user_id": user_id,
                 "session_id": data.get("session_id"),
                 "type": data.get("type", "report"),
-                "title": data.get("title", f"Mission Log {datetime.now().strftime('%Y-%m-%d')}"),
+                "title": data.get("title", f"Report {datetime.now().strftime('%Y-%m-%d')}"),
                 "content": data.get("content", ""),
                 "space_ids": data.get("space_ids", []),
                 "hub_ids": data.get("hub_ids", [])
             }).execute()
             return {"status": "success"}
 
+        elif action_type == "CREATE_SPACE":
+            result = supabase.table("spaces").insert({
+                "name": data.get("name", "New Space"),
+                "icon": data.get("icon", "Folder"),
+                "color": data.get("color", "#7F77DD"),
+                "user_id": user_id,
+            }).execute()
+            if result.data:
+                return {"status": "success", "data": result.data[0]}
+            raise Exception("Failed to create space")
+
+        elif action_type == "CREATE_HUB":
+            result = supabase.table("hubs").insert({
+                "name": data.get("name", "New Hub"),
+                "space_id": data.get("space_id"),
+                "icon": data.get("icon", "Folder"),
+                "color": data.get("color", "#7F77DD"),
+                "user_id": user_id,
+            }).execute()
+            if result.data:
+                return {"status": "success", "data": result.data[0]}
+            raise Exception("Failed to create hub")
+
+        elif action_type == "LOG_EXPENSE":
+            supabase.table("expenses").insert({
+                "amount": data.get("amount", 0),
+                "merchant": data.get("merchant"),
+                "category": data.get("category", "General"),
+                "hub_id": data.get("hub_id"),
+                "user_id": user_id,
+                "currency": data.get("currency", "PHP"),
+                "date": datetime.now().date().isoformat(),
+            }).execute()
+            return {"status": "success"}
+
+        elif action_type == "LOG_FOOD":
+            supabase.table("food_logs").insert({
+                "food_name": data.get("food_name", ""),
+                "calories": data.get("calories"),
+                "meal_type": data.get("meal_type", "meal"),
+                "hub_id": data.get("hub_id"),
+                "user_id": user_id,
+                "logged_at": datetime.now().isoformat(),
+            }).execute()
+            return {"status": "success"}
+
+        elif action_type == "SAVE_TO_VAULT":
+            supabase.table("vault_items").insert({
+                "content": data.get("content", ""),
+                "content_type": data.get("content_type", "text"),
+                "user_id": user_id,
+                "status": "unprocessed",
+            }).execute()
+            return {"status": "success"}
+
         return {"status": "error", "message": f"Unsupported action type: {action_type}"}
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=f"Mission Protocol Error: {str(ve)}")
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         print(f"execute_proposal error: {e}")
-        raise HTTPException(status_code=500, detail=f"Logical Integrity Failure: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def async_update_title(session_id: str, history: list):
-    from services.coordinator_agent import generate_session_title
-    new_title = await generate_session_title(history)
-    supabase.table("coordinator_sessions").update({"title": new_title}).eq("id", session_id).execute()
+    try:
+        from services.coordinator_agent import generate_session_title
+        new_title = await generate_session_title(history)
+        supabase.table("coordinator_sessions").update({"title": new_title}).eq("id", session_id).execute()
+    except Exception as e:
+        print(f"[async_update_title] error (non-fatal): {e}")
 
 @router.get("/outputs/{user_id}")
 async def get_outputs(user_id: str):

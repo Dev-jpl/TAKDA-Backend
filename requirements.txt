@@ -15,3 +15,7 @@ google-generativeai
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langchain-google-genai>=2.0.0

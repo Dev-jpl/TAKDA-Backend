@@ -4,7 +4,7 @@ import json
 import re
 from config import ASSISTANT_NAME
 
-QUIZ_PROMPT = f"""You are the {ASSISTANT_NAME} Quiz Agent. Your mission is to transform documents into testing material.
+QUIZ_PROMPT = f"""You are the {ASSISTANT_NAME} Quiz Agent. You transform documents into testing material.
 Generate a quiz based on the user's request and the provided context.
 
 QUESTION FORMATS:
