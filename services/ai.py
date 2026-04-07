@@ -90,13 +90,18 @@ async def get_ai_response_async(system: str, user: str) -> str:
         )
         return response.content[0].text
 
-    from openai import AsyncOpenAI
     if provider == "ollama":
-        client = AsyncOpenAI(
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
-            api_key="ollama",
-        )
-    elif provider == "groq":
+        from services.agent_graph.nodes import get_fast_model
+        from langchain_core.messages import SystemMessage, HumanMessage
+        model = get_fast_model()
+        response = await model.ainvoke([
+            SystemMessage(content=system),
+            HumanMessage(content=user),
+        ])
+        return response.content or ""
+
+    from openai import AsyncOpenAI
+    if provider == "groq":
         client = AsyncOpenAI(
             base_url="https://api.groq.com/openai/v1",
             api_key=os.getenv("GROQ_API_KEY"),

@@ -11,7 +11,10 @@ from services.aly_memory import extract_and_store_memories
 from config import ASSISTANT_NAME
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1")
-MAIN_MODEL = os.getenv("MAIN_MODEL", "qwen2.5-coder:7b")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama")
+MAIN_MODEL = os.getenv("MAIN_MODEL", "qwen2.5:7b")
+FAST_MODEL = os.getenv("FAST_MODEL", "qwen2.5:3b")
 MEMORY_TABLE = os.getenv("AGENT_MEMORY_TABLE", "agent_memory")
 
 # Maps LangChain tool name → action_type used by execute_proposal
@@ -105,30 +108,61 @@ def _build_proposal(tool_name: str, tool_args: dict, hubs: list) -> dict:
     }
 
 AGENT_SYSTEM = f"""You are {ASSISTANT_NAME} — a warm, sharp personal companion inside TAKDA.
-You know the user's tasks, documents, calendar, and spending.
-Speak like a trusted friend who gets things done.
-Be concise. Be real. Never corporate or robotic.
-If data isn't in context, say so briefly.
+You have full visibility into the user's world: their tasks, calendar events, spaces, hubs, \
+annotations, knowledge documents, fitness activity, and connected integrations.
+Speak like a trusted friend who gets things done — concise, real, never corporate or robotic.
+Reference specific data from context when relevant. If something isn't in context, say so briefly.
 Always respond in the same language the user writes in."""
 
 
 def get_main_model():
-    model = ChatOpenAI(
-        model=MAIN_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        api_key="ollama",
+    if AI_PROVIDER == "ollama":
+        base_url = OLLAMA_BASE_URL
+        api_key = "ollama"
+        model = MAIN_MODEL
+    else:
+        base_url = OPENROUTER_BASE_URL
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        model = "anthropic/claude-sonnet-4-6"
+
+    return ChatOpenAI(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
         streaming=True,
         temperature=0.3,
+    ).bind_tools(AGENT_TOOLS)
+
+
+def get_fast_model():
+    if AI_PROVIDER == "ollama":
+        base_url = OLLAMA_BASE_URL
+        api_key = "ollama"
+        model = FAST_MODEL
+    else:
+        base_url = OPENROUTER_BASE_URL
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        model = "meta-llama/llama-3.1-8b-instruct:free"
+
+    return ChatOpenAI(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        streaming=False,
+        temperature=0.1,
     )
-    return model.bind_tools(AGENT_TOOLS)
 
 
 # ── Node 1: Load context ──────────────────────────────────────────────────────
 async def node_load_context(state: AgentState) -> AgentState:
+    from datetime import datetime, timezone, timedelta
     user_id = state["user_id"]
     hub_ids = state.get("hub_ids", [])
-    tasks, hubs, memories = [], [], []
 
+    tasks, hubs, spaces, memories = [], [], [], []
+    events, annotations, knowledge_docs, strava_activities, integrations = [], [], [], [], []
+
+    # Tasks — active only
     try:
         q = supabase.table("tasks").select("id,title,status,priority,hub_id,due_date") \
             .eq("user_id", user_id).neq("status", "done").limit(20)
@@ -138,6 +172,7 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] tasks error: {e}")
 
+    # Hubs with parent space name
     try:
         q = supabase.table("hubs").select("id,name,space_id,spaces(name)") \
             .eq("user_id", user_id)
@@ -149,6 +184,15 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] hubs error: {e}")
 
+    # Spaces
+    try:
+        raw = supabase.table("spaces").select("id,name,description") \
+            .eq("user_id", user_id).limit(20).execute().data or []
+        spaces = [{"id": s["id"], "name": s["name"], "description": s.get("description", "")} for s in raw]
+    except Exception as e:
+        print(f"[node_load_context] spaces error: {e}")
+
+    # Memories
     try:
         memories = supabase.table(MEMORY_TABLE) \
             .select("content,memory_type") \
@@ -158,11 +202,94 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] memories error: {e}")
 
+    # Calendar events — next 7 days
+    try:
+        now = datetime.now(timezone.utc)
+        week_out = (now + timedelta(days=7)).isoformat()
+        raw = supabase.table("events") \
+            .select("id,title,start_time,end_time,location,description") \
+            .eq("user_id", user_id) \
+            .gte("start_time", now.isoformat()) \
+            .lte("start_time", week_out) \
+            .order("start_time") \
+            .limit(15).execute().data or []
+        events = [{"title": e["title"], "start": e["start_time"],
+                   "end": e.get("end_time"), "location": e.get("location")} for e in raw]
+    except Exception as e:
+        print(f"[node_load_context] events error: {e}")
+
+    # Annotations — recent across user's hubs
+    try:
+        user_hub_ids = [h["id"] for h in hubs] if hubs else []
+        if user_hub_ids:
+            raw = supabase.table("annotations") \
+                .select("id,content,category,hub_id") \
+                .in_("hub_id", user_hub_ids) \
+                .order("created_at", desc=True) \
+                .limit(10).execute().data or []
+            hub_map = {h["id"]: h["name"] for h in hubs}
+            annotations = [{"content": a["content"], "category": a["category"],
+                            "hub": hub_map.get(a["hub_id"], "")} for a in raw]
+    except Exception as e:
+        print(f"[node_load_context] annotations error: {e}")
+
+    # Knowledge documents — titles only (content is too large)
+    try:
+        raw = supabase.table("documents") \
+            .select("id,title,source_type") \
+            .eq("user_id", user_id) \
+            .order("created_at", desc=True) \
+            .limit(15).execute().data or []
+        knowledge_docs = [{"id": d["id"], "title": d["title"], "type": d.get("source_type", "")} for d in raw]
+    except Exception as e:
+        print(f"[node_load_context] knowledge_docs error: {e}")
+
+    # Strava — recent activities (if connected)
+    try:
+        raw = supabase.table("strava_activities") \
+            .select("sport_type,name,distance_meters,moving_time_seconds,start_date") \
+            .eq("user_id", user_id) \
+            .order("start_date", desc=True) \
+            .limit(5).execute().data or []
+        strava_activities = [
+            {
+                "sport": a["sport_type"],
+                "name": a.get("name", ""),
+                "distance_km": round(a.get("distance_meters", 0) / 1000, 1),
+                "duration_min": round(a.get("moving_time_seconds", 0) / 60),
+                "date": (a.get("start_date") or "")[:10],
+            }
+            for a in raw
+        ]
+    except Exception as e:
+        print(f"[node_load_context] strava error: {e}")
+
+    # Connected integrations (which ones are linked)
+    try:
+        raw = supabase.table("user_integrations") \
+            .select("provider") \
+            .eq("user_id", user_id) \
+            .execute().data or []
+        integrations = [r["provider"] for r in raw]
+    except Exception as e:
+        print(f"[node_load_context] integrations error: {e}")
+
     return {
         **state,
-        "tasks": tasks, "hubs": hubs, "memories": memories,
-        "docs_text": "", "tool_results": [], "actions": [],
-        "needs_clarification": False, "clarification_question": "",
+        "tasks": tasks,
+        "hubs": hubs,
+        "spaces": spaces,
+        "memories": memories,
+        "events": events,
+        "annotations": annotations,
+        "knowledge_docs": knowledge_docs,
+        "strava_activities": strava_activities,
+        "integrations": integrations,
+        "docs_text": "",
+        "tool_results": [],
+        "actions": [],
+        "needs_clarification": False,
+        "clarification_question": "",
     }
 
 
@@ -174,14 +301,27 @@ async def node_classify_intent(state: AgentState) -> AgentState:
     ]) if history else ""
 
     prompt = f"""Classify this message into one or more intents.
-Intents: TASK | CALENDAR | EXPENSE | FOOD | REPORT | QUIZ | KNOWLEDGE | BRIEFING | VAULT | SPACE | CHAT | CLARIFY
 
-CLARIFY = user wants an action but essential info is missing (no hub, no amount, no date)
-VAULT = user wants to save something without specifying where
-BRIEFING = user asks about their day, week, or status
-SPACE = user wants to create or organize spaces/hubs
+Intents:
+- TASK: create, update, delete, or ask about tasks
+- CALENDAR: create, update, delete, or ask about events
+- EXPENSE: log or ask about spending
+- FOOD: log or ask about meals/nutrition
+- REPORT: generate or ask for a report
+- KNOWLEDGE: ask about documents or knowledge base
+- BRIEFING: ask for a summary of their day, week, progress, or any data overview
+- VAULT: save something for later without specifying where
+- SPACE: create or organize spaces/hubs
+- CHAT: general conversation, reflection, opinions, casual questions
+- CLARIFY: user wants a SPECIFIC action (create/update/delete) but is missing required details
 
-Return ONLY valid JSON: {{"intents":["TASK"],"primary":"TASK"}}
+Rules:
+- CLARIFY only when the user clearly wants to DO something but is missing required fields (e.g. "add a task" with no title)
+- Reflective/review questions ("how am I doing", "how is my X journey", "what have I done this week") → BRIEFING
+- Questions about specific data ("show me my strava", "what tasks do I have") → use the matching intent (TASK, BRIEFING, etc.)
+- Default to CHAT for anything conversational
+
+Return ONLY valid JSON: {{"intents":["BRIEFING"],"primary":"BRIEFING"}}
 
 Recent conversation:
 {history_text}
@@ -228,33 +368,99 @@ Ask ONE specific question to get the missing info. Be brief and warm. Max 1 sent
         return {**state, "needs_clarification": False}
 
 
-# ── Node 4: Main response (Claude Sonnet 4.6 via OpenRouter) ──────────────────
+# ── Node 4: Main response ─────────────────────────────────────────────────────
 async def node_respond(state: AgentState) -> AgentState:
-    tasks_text = "\n".join([
-        f"- {t['title']} ({t['status']}, {t.get('priority','low')}) [id:{t['id']}]"
-        for t in state.get("tasks", [])
-    ]) or "No active tasks."
+    def _fmt_list(items, fmt_fn, empty="None."):
+        return "\n".join(fmt_fn(i) for i in items) if items else empty
 
-    hubs_text = "\n".join([
-        f"- {h['name']} — {h.get('space_name','')} [id:{h['id']}]"
-        for h in state.get("hubs", [])
-    ]) or "No hubs found."
+    tasks_text = _fmt_list(
+        state.get("tasks", []),
+        lambda t: f"- [{t.get('priority','low')}] {t['title']} ({t['status']})"
+                  + (f" · due {t['due_date']}" if t.get("due_date") else "")
+                  + f" [id:{t['id']}]",
+        "No active tasks.",
+    )
 
-    memory_text = "\n".join([f"- {m['content']}" for m in state.get("memories", [])])
+    hubs_text = _fmt_list(
+        state.get("hubs", []),
+        lambda h: f"- {h['name']}" + (f" (in {h['space_name']})" if h.get("space_name") else "")
+                  + f" [id:{h['id']}]",
+        "No hubs.",
+    )
+
+    spaces_text = _fmt_list(
+        state.get("spaces", []),
+        lambda s: f"- {s['name']}" + (f": {s['description']}" if s.get("description") else ""),
+        "No spaces.",
+    )
+
+    events_text = _fmt_list(
+        state.get("events", []),
+        lambda e: f"- {e['title']} @ {(e['start'] or '')[:16].replace('T', ' ')}"
+                  + (f" [{e['location']}]" if e.get("location") else ""),
+        "No upcoming events.",
+    )
+
+    annotations_text = _fmt_list(
+        state.get("annotations", []),
+        lambda a: f"- [{a['category']}] {a['content'][:80]}" + (f" (hub: {a['hub']})" if a.get("hub") else ""),
+        "No annotations.",
+    )
+
+    knowledge_text = _fmt_list(
+        state.get("knowledge_docs", []),
+        lambda d: f"- {d['title']}" + (f" ({d['type']})" if d.get("type") else ""),
+        "No documents.",
+    )
+
+    strava_text = _fmt_list(
+        state.get("strava_activities", []),
+        lambda a: f"- {a['date']} {a['sport']}: {a['name']} · {a['distance_km']}km · {a['duration_min']}min",
+        "No recent Strava activity.",
+    )
+
+    integrations = state.get("integrations", [])
+    integrations_text = ", ".join(integrations) if integrations else "None connected."
+
+    memory_text = _fmt_list(
+        state.get("memories", []),
+        lambda m: f"- {m['content']}",
+        "Nothing yet.",
+    )
+
     history_text = "\n".join([
         f"{m['role']}: {m['content'][:200]}" for m in state.get("history", [])[-6:]
     ])
 
-    context = f"""Tasks:
+    context = f"""=== USER CONTEXT ===
+
+Tasks (active):
 {tasks_text}
+
+Spaces:
+{spaces_text}
 
 Hubs:
 {hubs_text}
 
-What you know about this user:
-{memory_text or 'Nothing yet.'}
+Calendar (next 7 days):
+{events_text}
 
-Recent conversation:
+Annotations (recent):
+{annotations_text}
+
+Knowledge documents:
+{knowledge_text}
+
+Strava (recent activity):
+{strava_text}
+
+Connected integrations: {integrations_text}
+
+What you know about this user:
+{memory_text}
+
+=== CONVERSATION ===
 {history_text}
 
 User: {state['user_message']}"""

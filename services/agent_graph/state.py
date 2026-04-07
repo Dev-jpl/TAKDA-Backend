@@ -12,7 +12,13 @@ class AgentState(TypedDict):
     # Context (loaded by node_load_context)
     tasks: List[dict]
     hubs: List[dict]
+    spaces: List[dict]
     memories: List[dict]
+    events: List[dict]
+    annotations: List[dict]
+    knowledge_docs: List[dict]
+    strava_activities: List[dict]
+    integrations: List[dict]
     docs_text: str
 
     # Conversation history
