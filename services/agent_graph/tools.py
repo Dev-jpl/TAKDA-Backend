@@ -50,8 +50,8 @@ def create_event(title: str, start_time: str,
         dt = datetime.fromisoformat(start_time)
         end_time = (dt + timedelta(hours=1)).isoformat()
     result = supabase.table("events").insert({
-        "title": title, "start_time": start_time,
-        "end_time": end_time, "location": location, "user_id": user_id,
+        "title": title, "start_at": start_time,
+        "end_at": end_time, "location": location, "user_id": user_id,
     }).execute()
     if result.data:
         return {"success": True, "type": "event_created",

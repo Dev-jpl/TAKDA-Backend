@@ -1,6 +1,7 @@
 import os
 import json
 import re
+from datetime import datetime, timezone, timedelta
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from database import supabase
@@ -155,7 +156,6 @@ def get_fast_model():
 
 # ── Node 1: Load context ──────────────────────────────────────────────────────
 async def node_load_context(state: AgentState) -> AgentState:
-    from datetime import datetime, timezone, timedelta
     user_id = state["user_id"]
     hub_ids = state.get("hub_ids", [])
 
@@ -202,19 +202,20 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] memories error: {e}")
 
-    # Calendar events — next 7 days
+    # Calendar events — look back 12h to catch ongoing and today's early events (timezone buffer)
     try:
         now = datetime.now(timezone.utc)
+        lookback = (now - timedelta(hours=12)).isoformat()
         week_out = (now + timedelta(days=7)).isoformat()
         raw = supabase.table("events") \
-            .select("id,title,start_time,end_time,location,description") \
+            .select("id,title,start_at,end_at,location,description") \
             .eq("user_id", user_id) \
-            .gte("start_time", now.isoformat()) \
-            .lte("start_time", week_out) \
-            .order("start_time") \
-            .limit(15).execute().data or []
-        events = [{"title": e["title"], "start": e["start_time"],
-                   "end": e.get("end_time"), "location": e.get("location")} for e in raw]
+            .gte("start_at", lookback) \
+            .lte("start_at", week_out) \
+            .order("start_at") \
+            .limit(40).execute().data or []
+        events = [{"title": e["title"], "start": e["start_at"],
+                   "end": e.get("end_at"), "location": e.get("location")} for e in raw]
     except Exception as e:
         print(f"[node_load_context] events error: {e}")
 
@@ -432,7 +433,13 @@ async def node_respond(state: AgentState) -> AgentState:
         f"{m['role']}: {m['content'][:200]}" for m in state.get("history", [])[-6:]
     ])
 
+    now_utc = datetime.now(timezone.utc)
+    now_pht = now_utc + timedelta(hours=8)
+    now_str = now_pht.strftime("%A, %B %-d, %Y at %-I:%M %p (PHT)")
+
     context = f"""=== USER CONTEXT ===
+
+Current date and time: {now_str}
 
 Tasks (active):
 {tasks_text}

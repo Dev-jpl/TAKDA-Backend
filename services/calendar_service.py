@@ -16,11 +16,11 @@ def get_events(user_id: str, start_date: Optional[str] = None, end_date: Optiona
     query = supabase.table("events").select("*").eq("user_id", user_id)
     
     if start_date:
-        query = query.gte("start_time", start_date)
+        query = query.gte("start_at", start_date)
     if end_date:
-        query = query.lte("end_time", end_date)
-        
-    res = query.order("start_time", desc=False).execute()
+        query = query.lte("end_at", end_date)
+
+    res = query.order("start_at", desc=False).execute()
     return res.data or []
 
 def create_event(user_id: str, title: str, start_time: str, end_time: Optional[str] = None, location: Optional[str] = None) -> Dict[str, Any]:
@@ -39,8 +39,8 @@ def create_event(user_id: str, title: str, start_time: str, end_time: Optional[s
     res = supabase.table("events").insert({
         "user_id": user_id,
         "title": title,
-        "start_time": st.isoformat(),
-        "end_time": et.isoformat(),
+        "start_at": st.isoformat(),
+        "end_at": et.isoformat(),
         "location": location
     }).execute()
     

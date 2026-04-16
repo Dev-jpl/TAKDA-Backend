@@ -33,7 +33,7 @@ async def run_calendar_logic(user_id: str, message: str, context: dict) -> Async
         events = get_events(user_id, start, end)
         
         if events:
-            context_snippet = "\nEXISTING EVENTS:\n" + "\n".join([f"- {e['title']} @ {e['start_time']} [id: {e['id']}]" for e in events])
+            context_snippet = "\nEXISTING EVENTS:\n" + "\n".join([f"- {e['title']} @ {e['start_at']} [id: {e['id']}]" for e in events])
             message += context_snippet
         else:
             message += "\n(No events found for this period.)"
