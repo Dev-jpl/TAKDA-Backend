@@ -146,11 +146,32 @@ async def execute_proposal(body: dict):
 
     try:
         if action_type == "CREATE_TASK":
-            from services.task_service import execute_task_action
-            # Reconstruct the tag for the existing task_service
-            tag = f'title="{data.get("title")}" hub_id="{data.get("hub_id")}" priority="{data.get("priority", "low")}"'
-            result = await execute_task_action(tag, user_id)
-            return {"status": "success", "data": result}
+            # Resolve hub_name → hub_id
+            hub_name = data.get("hub_name", "")
+            hub_id = data.get("hub_id")  # fallback if already resolved
+            if hub_name and not hub_id:
+                hubs = supabase.table("hubs").select("id,name").eq("user_id", user_id).execute().data or []
+                hub = next((h for h in hubs if h["name"].lower() == hub_name.lower()), None)
+                if not hub:
+                    hub = next((h for h in hubs if hub_name.lower() in h["name"].lower()), None)
+                if not hub:
+                    raise HTTPException(status_code=400, detail=f"Hub '{hub_name}' not found.")
+                hub_id = hub["id"]
+            if not hub_id:
+                raise HTTPException(status_code=400, detail="hub_name is required to create a task")
+            row = {
+                "title": data.get("title", "New Task"),
+                "hub_id": hub_id,
+                "priority": data.get("priority", "low"),
+                "status": "todo",
+                "user_id": user_id,
+            }
+            if data.get("due_date"):
+                row["due_date"] = data["due_date"]
+            result = supabase.table("tasks").insert(row).execute()
+            if result.data:
+                return {"status": "success", "data": result.data[0]}
+            raise Exception("Failed to create task")
             
         elif action_type == "UPDATE_TASK":
             if data.get("id"):
@@ -206,9 +227,22 @@ async def execute_proposal(body: dict):
             raise Exception("Failed to create space")
 
         elif action_type == "CREATE_HUB":
+            # Resolve space_name → space_id
+            space_name = data.get("space_name", "")
+            space_id = data.get("space_id")  # fallback if already resolved
+            if space_name and not space_id:
+                spaces = supabase.table("spaces").select("id,name").eq("user_id", user_id).execute().data or []
+                space = next((s for s in spaces if s["name"].lower() == space_name.lower()), None)
+                if not space:
+                    space = next((s for s in spaces if space_name.lower() in s["name"].lower()), None)
+                if not space:
+                    raise HTTPException(status_code=400, detail=f"Space '{space_name}' not found.")
+                space_id = space["id"]
+            if not space_id:
+                raise HTTPException(status_code=400, detail="space_name is required to create a hub")
             result = supabase.table("hubs").insert({
                 "name": data.get("name", "New Hub"),
-                "space_id": data.get("space_id"),
+                "space_id": space_id,
                 "icon": data.get("icon", "Folder"),
                 "color": data.get("color", "#7F77DD"),
                 "user_id": user_id,

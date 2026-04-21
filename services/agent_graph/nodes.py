@@ -38,11 +38,11 @@ def _build_proposal(tool_name: str, tool_args: dict, hubs: list) -> dict:
     action_type = TOOL_TO_ACTION.get(tool_name, tool_name.upper())
 
     if tool_name == "create_task":
-        hub = next((h for h in hubs if h["id"] == tool_args.get("hub_id")), None)
-        hub_name = hub["name"] if hub else "your hub"
+        hub_name = tool_args.get("hub_name", "your hub")
         priority = tool_args.get("priority", "low")
         label = tool_args.get("title", "New task")
-        impact = f"Add '{label}' to {hub_name} · {priority} priority"
+        due = f" · due {tool_args['due_date']}" if tool_args.get("due_date") else ""
+        impact = f"Add '{label}' to {hub_name} · {priority} priority{due}"
 
     elif tool_name == "update_task":
         label = tool_args.get("title") or f"task"
@@ -90,7 +90,8 @@ def _build_proposal(tool_name: str, tool_args: dict, hubs: list) -> dict:
 
     elif tool_name == "create_hub":
         label = tool_args.get("name", "New hub")
-        impact = f"Create hub '{label}'"
+        space_name = tool_args.get("space_name", "")
+        impact = f"Create hub '{label}'" + (f" in {space_name}" if space_name else "")
 
     else:
         label = tool_name
@@ -108,12 +109,23 @@ def _build_proposal(tool_name: str, tool_args: dict, hubs: list) -> dict:
         "data": data,
     }
 
-AGENT_SYSTEM = f"""You are {ASSISTANT_NAME} — a warm, sharp personal companion inside TAKDA.
+def _get_system_prompt() -> str:
+    now_utc = datetime.now(timezone.utc)
+    now_pht = now_utc + timedelta(hours=8)
+    now_str = now_pht.strftime("%A, %B %-d, %Y at %-I:%M %p (PHT)")
+    return f"""You are {ASSISTANT_NAME} — a warm, sharp personal companion inside TAKDA.
 You have full visibility into the user's world: their tasks, calendar events, spaces, hubs, \
 annotations, knowledge documents, fitness activity, and connected integrations.
 Speak like a trusted friend who gets things done — concise, real, never corporate or robotic.
 Reference specific data from context when relevant. If something isn't in context, say so briefly.
-Always respond in the same language the user writes in."""
+Always respond in the same language the user writes in.
+
+Tool guidance:
+- Use log_expense when the user mentions prices, costs, spending money, or explicitly says "expense tracker" / "budget". Numbers alongside items = prices.
+- Use log_food ONLY for calorie/nutrition tracking. If food items have prices attached, use log_expense.
+- When a user lists multiple items with amounts (e.g. "chicken 79, rice 15"), call log_expense once per item.
+
+Today is {now_str}."""
 
 
 def get_main_model():
@@ -251,14 +263,19 @@ async def node_load_context(state: AgentState) -> AgentState:
             .select("sport_type,name,distance_meters,moving_time_seconds,start_date") \
             .eq("user_id", user_id) \
             .order("start_date", desc=True) \
-            .limit(5).execute().data or []
+            .limit(15).execute().data or []
         strava_activities = [
             {
                 "sport": a["sport_type"],
                 "name": a.get("name", ""),
                 "distance_km": round(a.get("distance_meters", 0) / 1000, 1),
                 "duration_min": round(a.get("moving_time_seconds", 0) / 60),
-                "date": (a.get("start_date") or "")[:10],
+                # Convert UTC → PHT (UTC+8) for display
+                "date": (
+                    (datetime.fromisoformat((a["start_date"] or "").replace("Z", "+00:00"))
+                     + timedelta(hours=8)).strftime("%Y-%m-%d")
+                    if a.get("start_date") else ""
+                ),
             }
             for a in raw
         ]
@@ -391,7 +408,7 @@ async def node_respond(state: AgentState) -> AgentState:
 
     spaces_text = _fmt_list(
         state.get("spaces", []),
-        lambda s: f"- {s['name']}" + (f": {s['description']}" if s.get("description") else ""),
+        lambda s: f"- {s['name']} [id:{s['id']}]" + (f": {s['description']}" if s.get("description") else ""),
         "No spaces.",
     )
 
@@ -472,7 +489,7 @@ What you know about this user:
 
 User: {state['user_message']}"""
 
-    messages = [SystemMessage(content=AGENT_SYSTEM), HumanMessage(content=context)]
+    messages = [SystemMessage(content=_get_system_prompt()), HumanMessage(content=context)]
     model = get_main_model()
     proposals = []
     response_text = ""

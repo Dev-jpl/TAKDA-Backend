@@ -12,6 +12,8 @@ class HubCreate(BaseModel):
     icon: str = "Circle"
     color: str = "#7F77DD"
     description: Optional[str] = None
+    modules: List[str] = []   # selected core modules e.g. ["track", "annotate"]
+    addons: List[str] = []    # selected addon types e.g. ["calorie_counter"]
 
 class HubUpdate(BaseModel):
     name: Optional[str] = None
@@ -63,9 +65,11 @@ async def create_hub(body: HubCreate):
 
     hub_id = hub.data[0]["id"]
 
-    # Enable all modules by default for the hub
-    modules = ["track", "annotate", "knowledge", "deliver", "automate"]
-    for i, module in enumerate(modules):
+    # Install only the selected core modules
+    valid_modules = ["track", "annotate", "knowledge", "deliver", "automate"]
+    for i, module in enumerate(body.modules):
+        if module not in valid_modules:
+            continue
         try:
             supabase.table("hub_modules").insert({
                 "hub_id": hub_id,
@@ -75,6 +79,21 @@ async def create_hub(body: HubCreate):
             }).execute()
         except Exception as e:
             print(f"Warning: could not insert hub_module '{module}': {e}")
+
+    # Install selected addon types
+    valid_addons = ["calorie_counter", "expense_tracker", "habit_tracker", "workout_log", "sleep_tracker"]
+    for addon_type in body.addons:
+        if addon_type not in valid_addons:
+            continue
+        try:
+            supabase.table("hub_addons").insert({
+                "hub_id": hub_id,
+                "user_id": body.user_id,
+                "type": addon_type,
+                "config": {},
+            }).execute()
+        except Exception as e:
+            print(f"Warning: could not install addon '{addon_type}': {e}")
 
     return hub.data[0]
 
@@ -103,6 +122,56 @@ async def delete_hub(hub_id: str):
         .eq("id", hub_id) \
         .execute()
     return {"status": "deleted"}
+
+# --- Add a core module to an existing hub ---
+@router.post("/{hub_id}/modules/{module_name}")
+async def add_hub_module(hub_id: str, module_name: str):
+    valid = ["track", "annotate", "knowledge", "deliver", "automate"]
+    if module_name not in valid:
+        raise HTTPException(status_code=400, detail=f"Unknown module '{module_name}'")
+    # Upsert (ignore conflict if already exists)
+    try:
+        # Check if already exists
+        existing = supabase.table("hub_modules") \
+            .select("id, is_enabled") \
+            .eq("hub_id", hub_id) \
+            .eq("module", module_name) \
+            .execute()
+        if existing.data:
+            # Re-enable if disabled
+            supabase.table("hub_modules") \
+                .update({"is_enabled": True}) \
+                .eq("hub_id", hub_id) \
+                .eq("module", module_name) \
+                .execute()
+            return {"status": "enabled", "module": module_name}
+        # Get next order index
+        current = supabase.table("hub_modules") \
+            .select("order_index") \
+            .eq("hub_id", hub_id) \
+            .order("order_index", desc=True) \
+            .limit(1) \
+            .execute()
+        next_order = (current.data[0]["order_index"] + 1) if current.data else 0
+        supabase.table("hub_modules").insert({
+            "hub_id": hub_id,
+            "module": module_name,
+            "order_index": next_order,
+            "is_enabled": True,
+        }).execute()
+        return {"status": "created", "module": module_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Remove a core module from a hub ---
+@router.delete("/{hub_id}/modules/{module_name}")
+async def remove_hub_module(hub_id: str, module_name: str):
+    supabase.table("hub_modules") \
+        .update({"is_enabled": False}) \
+        .eq("hub_id", hub_id) \
+        .eq("module", module_name) \
+        .execute()
+    return {"status": "disabled", "module": module_name}
 
 # --- Reorder hubs ---
 @router.post("/reorder")
