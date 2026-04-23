@@ -16,15 +16,59 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama")
 MAIN_MODEL = os.getenv("MAIN_MODEL", "qwen2.5:7b")
 FAST_MODEL = os.getenv("FAST_MODEL", "qwen2.5:3b")
-MEMORY_TABLE = os.getenv("AGENT_MEMORY_TABLE", "agent_memory")
+MEMORY_TABLE = os.getenv("AGENT_MEMORY_TABLE", "aly_memories")
+
+INTENT_CONTEXT_MAP = {
+    "CHAT": ["memories", "annotations", "knowledge", "strava"],
+    "BRIEFING": ["memories", "annotations", "knowledge", "strava"],
+    "KNOWLEDGE": ["annotations", "knowledge"],
+    "TASK": ["annotations"],
+}
+
+def _load_wellbeing_signals(user_id: str) -> list[str]:
+    signals = []
+    # 1. Vault Density
+    try:
+        res = supabase.table("vault_items").select("id", count="exact").eq("user_id", user_id).eq("status", "unprocessed").execute()
+        count = res.count or 0
+        if count > 10:
+            signals.append(f"Vault is getting full ({count} unprocessed items). Suggest a quick triage.")
+        elif count == 0:
+            signals.append("Vault is totally clear (inbox zero).")
+    except Exception:
+        pass
+
+    # 2. Meal Gaps
+    try:
+        res = supabase.table("food_logs").select("logged_at").eq("user_id", user_id).order("logged_at", desc=True).limit(1).execute()
+        if res.data and res.data[0].get("logged_at"):
+            last_meal = datetime.fromisoformat(res.data[0]["logged_at"].replace("Z", "+00:00"))
+            hours_since = (datetime.now(timezone.utc) - last_meal).total_seconds() / 3600
+            if hours_since > 6:
+                signals.append(f"Hasn't logged any food in {int(hours_since)} hours.")
+    except Exception:
+        pass
+
+    # 3. Activity Gaps
+    try:
+        res = supabase.table("strava_activities").select("start_date").eq("user_id", user_id).order("start_date", desc=True).limit(1).execute()
+        if res.data and res.data[0].get("start_date"):
+            last_activity = datetime.fromisoformat(res.data[0]["start_date"].replace("Z", "+00:00"))
+            days_since = (datetime.now(timezone.utc) - last_activity).days
+            if days_since >= 2:
+                signals.append(f"Hasn't exercised in {days_since} days.")
+    except Exception:
+        pass
+
+    return signals
+
 
 # Maps LangChain tool name → action_type used by execute_proposal
 TOOL_TO_ACTION = {
     "create_task": "CREATE_TASK",
     "update_task": "UPDATE_TASK",
     "create_event": "CREATE_EVENT",
-    "log_expense": "LOG_EXPENSE",
-    "log_food": "LOG_FOOD",
+    "log_module_entry": "LOG_MODULE_ENTRY",
     "save_to_vault": "SAVE_TO_VAULT",
     "save_report": "SAVE_REPORT",
     "create_space": "CREATE_SPACE",
@@ -61,19 +105,11 @@ def _build_proposal(tool_name: str, tool_args: dict, hubs: list) -> dict:
         except Exception:
             impact = f"Schedule '{label}'" + (f" on {start}" if start else "")
 
-    elif tool_name == "log_expense":
-        amount = tool_args.get("amount", 0)
-        merchant = tool_args.get("merchant", "unknown")
-        currency = tool_args.get("currency", "PHP")
-        label = f"{currency} {float(amount):.2f} at {merchant}"
-        impact = f"Log expense: {label}"
-
-    elif tool_name == "log_food":
-        food = tool_args.get("food_name", "food")
-        cals = tool_args.get("calories")
-        meal_type = tool_args.get("meal_type", "meal")
-        label = food
-        impact = f"Log {meal_type}: {food}" + (f" · {cals} kcal" if cals else "")
+    elif tool_name == "log_module_entry":
+        slug = tool_args.get("module_slug", "module")
+        data = tool_args.get("data", {})
+        label = data.get("food_name") or data.get("item") or data.get("food") or slug
+        impact = f"Log '{label}' entry to {slug}"
 
     elif tool_name == "save_to_vault":
         content = tool_args.get("content", "")
@@ -109,21 +145,28 @@ def _build_proposal(tool_name: str, tool_args: dict, hubs: list) -> dict:
         "data": data,
     }
 
-def _get_system_prompt() -> str:
+def _get_system_prompt(context_bio: str = "", wellbeing_signals: list[str] = None, modules_text: str = "") -> str:
     now_utc = datetime.now(timezone.utc)
     now_pht = now_utc + timedelta(hours=8)
     now_str = now_pht.strftime("%A, %B %-d, %Y at %-I:%M %p (PHT)")
+    bio_section = f"\nUser Bio/Context:\n{context_bio}\n" if context_bio else ""
+    signals_section = f"\nWellbeing Signals (Actionable intel on the user's state):\n- " + "\n- ".join(wellbeing_signals) + "\n" if wellbeing_signals else ""
     return f"""You are {ASSISTANT_NAME} — a warm, sharp personal companion inside TAKDA.
 You have full visibility into the user's world: their tasks, calendar events, spaces, hubs, \
 annotations, knowledge documents, fitness activity, and connected integrations.
+{bio_section}{signals_section}
 Speak like a trusted friend who gets things done — concise, real, never corporate or robotic.
 Reference specific data from context when relevant. If something isn't in context, say so briefly.
 Always respond in the same language the user writes in.
 
+CUSTOM MODULES:
+{modules_text}
+
 Tool guidance:
-- Use log_expense when the user mentions prices, costs, spending money, or explicitly says "expense tracker" / "budget". Numbers alongside items = prices.
-- Use log_food ONLY for calorie/nutrition tracking. If food items have prices attached, use log_expense.
-- When a user lists multiple items with amounts (e.g. "chicken 79, rice 15"), call log_expense once per item.
+- Use log_module_entry to record data into any of the CUSTOM MODULES listed above.
+- If the user mentions prices/spending, use log_module_entry with 'expense_tracker'.
+- If the user mentions food/calories, use log_module_entry with 'calorie_counter'.
+- When a user lists multiple items with amounts (e.g. "chicken 79, rice 15"), call the tool once per item.
 
 Today is {now_str}."""
 
@@ -170,11 +213,24 @@ def get_fast_model():
 async def node_load_context(state: AgentState) -> AgentState:
     user_id = state["user_id"]
     hub_ids = state.get("hub_ids", [])
+    intent = state.get("intent", "CHAT")
 
     tasks, hubs, spaces, memories = [], [], [], []
     events, annotations, knowledge_docs, strava_activities, integrations = [], [], [], [], []
+    context_bio = ""
 
-    # Tasks — active only
+    # User Profile (Tier 1)
+    try:
+        raw = supabase.table("user_profiles").select("context_bio").eq("id", user_id).maybe_single().execute().data
+        if raw:
+            context_bio = raw.get("context_bio", "")
+    except Exception as e:
+        print(f"[node_load_context] profile error: {e}")
+
+    # Wellbeing Signals (Tier 1)
+    wellbeing_signals = _load_wellbeing_signals(user_id)
+
+    # Tasks — active only (Tier 1)
     try:
         q = supabase.table("tasks").select("id,title,status,priority,hub_id,due_date") \
             .eq("user_id", user_id).neq("status", "done").limit(20)
@@ -204,15 +260,16 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] spaces error: {e}")
 
-    # Memories
-    try:
-        memories = supabase.table(MEMORY_TABLE) \
-            .select("content,memory_type") \
-            .eq("user_id", user_id) \
-            .order("last_reinforced", desc=True) \
-            .limit(8).execute().data or []
-    except Exception as e:
-        print(f"[node_load_context] memories error: {e}")
+    # Memories (Tier 2)
+    if "memories" in INTENT_CONTEXT_MAP.get(intent, []):
+        try:
+            memories = supabase.table(MEMORY_TABLE) \
+                .select("content,memory_type") \
+                .eq("user_id", user_id) \
+                .order("last_reinforced", desc=True) \
+                .limit(8).execute().data or []
+        except Exception as e:
+            print(f"[node_load_context] memories error: {e}")
 
     # Calendar events — look back 12h to catch ongoing and today's early events (timezone buffer)
     try:
@@ -231,56 +288,59 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] events error: {e}")
 
-    # Annotations — recent across user's hubs
-    try:
-        user_hub_ids = [h["id"] for h in hubs] if hubs else []
-        if user_hub_ids:
-            raw = supabase.table("annotations") \
-                .select("id,content,category,hub_id") \
-                .in_("hub_id", user_hub_ids) \
+    # Annotations — recent across user's hubs (Tier 2)
+    if "annotations" in INTENT_CONTEXT_MAP.get(intent, []):
+        try:
+            user_hub_ids = [h["id"] for h in hubs] if hubs else []
+            if user_hub_ids:
+                raw = supabase.table("annotations") \
+                    .select("id,content,category,hub_id") \
+                    .in_("hub_id", user_hub_ids) \
+                    .order("created_at", desc=True) \
+                    .limit(10).execute().data or []
+                hub_map = {h["id"]: h["name"] for h in hubs}
+                annotations = [{"content": a["content"], "category": a["category"],
+                                "hub": hub_map.get(a["hub_id"], "")} for a in raw]
+        except Exception as e:
+            print(f"[node_load_context] annotations error: {e}")
+
+    # Knowledge documents — titles only (Tier 2)
+    if "knowledge" in INTENT_CONTEXT_MAP.get(intent, []):
+        try:
+            raw = supabase.table("documents") \
+                .select("id,title,source_type") \
+                .eq("user_id", user_id) \
                 .order("created_at", desc=True) \
-                .limit(10).execute().data or []
-            hub_map = {h["id"]: h["name"] for h in hubs}
-            annotations = [{"content": a["content"], "category": a["category"],
-                            "hub": hub_map.get(a["hub_id"], "")} for a in raw]
-    except Exception as e:
-        print(f"[node_load_context] annotations error: {e}")
+                .limit(15).execute().data or []
+            knowledge_docs = [{"id": d["id"], "title": d["title"], "type": d.get("source_type", "")} for d in raw]
+        except Exception as e:
+            print(f"[node_load_context] knowledge_docs error: {e}")
 
-    # Knowledge documents — titles only (content is too large)
-    try:
-        raw = supabase.table("documents") \
-            .select("id,title,source_type") \
-            .eq("user_id", user_id) \
-            .order("created_at", desc=True) \
-            .limit(15).execute().data or []
-        knowledge_docs = [{"id": d["id"], "title": d["title"], "type": d.get("source_type", "")} for d in raw]
-    except Exception as e:
-        print(f"[node_load_context] knowledge_docs error: {e}")
-
-    # Strava — recent activities (if connected)
-    try:
-        raw = supabase.table("strava_activities") \
-            .select("sport_type,name,distance_meters,moving_time_seconds,start_date") \
-            .eq("user_id", user_id) \
-            .order("start_date", desc=True) \
-            .limit(15).execute().data or []
-        strava_activities = [
-            {
-                "sport": a["sport_type"],
-                "name": a.get("name", ""),
-                "distance_km": round(a.get("distance_meters", 0) / 1000, 1),
-                "duration_min": round(a.get("moving_time_seconds", 0) / 60),
-                # Convert UTC → PHT (UTC+8) for display
-                "date": (
-                    (datetime.fromisoformat((a["start_date"] or "").replace("Z", "+00:00"))
-                     + timedelta(hours=8)).strftime("%Y-%m-%d")
-                    if a.get("start_date") else ""
-                ),
-            }
-            for a in raw
-        ]
-    except Exception as e:
-        print(f"[node_load_context] strava error: {e}")
+    # Strava — recent activities (Tier 2)
+    if "strava" in INTENT_CONTEXT_MAP.get(intent, []):
+        try:
+            raw = supabase.table("strava_activities") \
+                .select("sport_type,name,distance_meters,moving_time_seconds,start_date") \
+                .eq("user_id", user_id) \
+                .order("start_date", desc=True) \
+                .limit(15).execute().data or []
+            strava_activities = [
+                {
+                    "sport": a["sport_type"],
+                    "name": a.get("name", ""),
+                    "distance_km": round(a.get("distance_meters", 0) / 1000, 1),
+                    "duration_min": round(a.get("moving_time_seconds", 0) / 60),
+                    # Convert UTC → PHT (UTC+8) for display
+                    "date": (
+                        (datetime.fromisoformat((a["start_date"] or "").replace("Z", "+00:00"))
+                         + timedelta(hours=8)).strftime("%Y-%m-%d")
+                        if a.get("start_date") else ""
+                    ),
+                }
+                for a in raw
+            ]
+        except Exception as e:
+            print(f"[node_load_context] strava error: {e}")
 
     # Connected integrations (which ones are linked)
     try:
@@ -292,8 +352,14 @@ async def node_load_context(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[node_load_context] integrations error: {e}")
 
+    # Load Module Definitions (to teach Aly about custom trackers)
+    def_res = supabase.table("module_definitions").select("slug,name,description,schema").execute()
+    module_definitions = def_res.data or []
+
     return {
         **state,
+        "context_bio": context_bio,
+        "wellbeing_signals": wellbeing_signals,
         "tasks": tasks,
         "hubs": hubs,
         "spaces": spaces,
@@ -303,6 +369,7 @@ async def node_load_context(state: AgentState) -> AgentState:
         "knowledge_docs": knowledge_docs,
         "strava_activities": strava_activities,
         "integrations": integrations,
+        "module_definitions": module_definitions,
         "docs_text": "",
         "tool_results": [],
         "actions": [],
@@ -489,7 +556,17 @@ What you know about this user:
 
 User: {state['user_message']}"""
 
-    messages = [SystemMessage(content=_get_system_prompt()), HumanMessage(content=context)]
+    # Module definitions for the system prompt
+    modules_text = "\n".join([
+        f"- {m['slug']}: {m['name']} - {m['description']}\n  Schema: {m['schema']}"
+        for m in state.get("module_definitions", [])
+    ])
+
+    messages = [SystemMessage(content=_get_system_prompt(
+        state.get("context_bio", ""),
+        state.get("wellbeing_signals", []),
+        modules_text
+    )), HumanMessage(content=context)]
     model = get_main_model()
     proposals = []
     response_text = ""
@@ -510,7 +587,20 @@ User: {state['user_message']}"""
                 proposals_summary = "\n".join([
                     f"- {p['impact']}" for p in proposals
                 ])
-                proposal_prompt = f"""You are about to do the following for the user:
+                # Custom Modules
+                modules_text = "\n".join([
+                    f"- {m['slug']}: {m['name']} - {m['description']}\n  Schema: {m['schema']}"
+                    for m in state.get("module_definitions", [])
+                ])
+
+                proposal_prompt = f"""You are Aly, a proactive life operating system assistant.
+                
+                CUSTOM MODULES:
+                {modules_text}
+                
+                Use log_module_entry to record data into these modules.
+
+You are about to do the following for the user:
 {proposals_summary}
 
 Write a brief, warm message (1-2 sentences) telling them what you're about to do and asking if they want to proceed.

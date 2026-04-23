@@ -5,6 +5,9 @@ from services.ai import get_ai_response_async
 
 router = APIRouter(prefix="/aly", tags=["aly"])
 
+# In-memory cache: { user_id: { "date": "YYYY-MM-DD", "insight": "..." } }
+_insight_cache: dict[str, dict] = {}
+
 @router.get("/daily-insight")
 async def daily_insight(user_id: str):
     try:
@@ -12,6 +15,11 @@ async def daily_insight(user_id: str):
         now_pht = now_utc + timedelta(hours=8)
         today_str = now_pht.strftime("%A, %B %-d, %Y")
         today_date = now_pht.date().isoformat()
+
+        # Return cached insight if it's still for today
+        cached = _insight_cache.get(user_id)
+        if cached and cached.get("date") == today_date and cached.get("insight"):
+            return {"insight": cached["insight"]}
 
         # ── Today's calendar events (PHT window = UTC-8h to UTC+16h)
         day_start_utc = (now_pht.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8)).isoformat()
@@ -97,7 +105,12 @@ Vault items to sort: {vault_count}"""
         )
 
         insight = await get_ai_response_async(system, context)
-        return {"insight": insight.strip()}
+        result  = insight.strip()
+
+        # Store in server-side cache for the rest of the day
+        _insight_cache[user_id] = {"date": today_date, "insight": result}
+
+        return {"insight": result}
 
     except Exception as e:
         print(f"[daily_insight] error for user {user_id}: {e}")

@@ -1,13 +1,9 @@
 import os
-from fastembed import TextEmbedding
+import google.generativeai as genai
 from database import supabase
 
-# Initialize FastEmbed (Optimized for CPU)
-# This will download the BGE-Small model (384-dims) on first run (~133MB)
-model = TextEmbedding(
-    model_name="BAAI/bge-small-en-v1.5",
-    cache_dir="/app/model_cache"
-)
+# Initialize Gemini API
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
@@ -25,16 +21,23 @@ def chunk_text(text: str) -> list[str]:
 
 
 def embed_text(text: str) -> list[float]:
-    """Generates an embedding for a document chunk using the local OS model."""
-    # FastEmbed's embed() returns a generator of numpy arrays
-    embeddings = list(model.embed([text]))
-    return embeddings[0].tolist()
+    """Generates an embedding for a document chunk using the Gemini model."""
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text,
+        task_type="retrieval_document",
+    )
+    return result["embedding"]
 
 
 def embed_query(text: str) -> list[float]:
-    """Generates an embedding for a search query. Same model used for documents."""
-    embeddings = list(model.embed([text]))
-    return embeddings[0].tolist()
+    """Generates an embedding for a search query using the Gemini model."""
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text,
+        task_type="retrieval_query",
+    )
+    return result["embedding"]
 
 
 async def process_document(document_id: str, text: str):

@@ -251,6 +251,34 @@ async def execute_proposal(body: dict):
                 return {"status": "success", "data": result.data[0]}
             raise Exception("Failed to create hub")
 
+        elif action_type == "LOG_MODULE_ENTRY":
+            slug = data.get("module_slug")
+            entry_data = data.get("data", {})
+            
+            # Find module def id
+            def_res = supabase.table("module_definitions").select("id").eq("slug", slug).maybe_single().execute()
+            if not def_res.data:
+                raise HTTPException(status_code=400, detail=f"Module '{slug}' not found")
+            
+            def_id = def_res.data["id"]
+            
+            # Resolve hub_id if hub_name is provided but hub_id is missing
+            hub_id = data.get("hub_id")
+            hub_name = data.get("hub_name")
+            if hub_name and not hub_id:
+                hubs = supabase.table("hubs").select("id,name").eq("user_id", user_id).execute().data or []
+                hub = next((h for h in hubs if h["name"].lower() == hub_name.lower()), None)
+                if hub: hub_id = hub["id"]
+
+            supabase.table("module_entries").insert({
+                "module_def_id": def_id,
+                "user_id": user_id,
+                "hub_id": hub_id,
+                "data": entry_data,
+                "created_at": datetime.now().isoformat()
+            }).execute()
+            return {"status": "success"}
+
         elif action_type == "LOG_EXPENSE":
             supabase.table("expenses").insert({
                 "amount": data.get("amount", 0),

@@ -30,10 +30,10 @@ def build_graph():
     graph.add_node("respond",             node_respond)
     graph.add_node("extract_memories",    node_extract_memories)
 
-    graph.set_entry_point("load_context")
-    graph.add_edge("load_context", "classify_intent")
+    graph.set_entry_point("classify_intent")
+    graph.add_edge("classify_intent", "load_context")
 
-    graph.add_conditional_edges("classify_intent", route_after_classify, {
+    graph.add_conditional_edges("load_context", route_after_classify, {
         "check_clarification": "check_clarification",
         "respond": "respond",
     })

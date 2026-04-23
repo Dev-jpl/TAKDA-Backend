@@ -1,6 +1,7 @@
 import json
 from services.ai import get_ai_response_async
 from database import supabase
+from services.embeddings import embed_text
 
 MEMORY_EXTRACT_PROMPT = """
 Read this conversation and extract facts about the user.
@@ -30,12 +31,19 @@ async def extract_and_store_memories(user_id: str, conversation: list):
             content = mem.get("content", "").strip()
             if not content:
                 continue
-            supabase.table("agent_memory").upsert({
+                
+            try:
+                embedding = embed_text(content)
+            except Exception:
+                embedding = None
+                
+            supabase.table("aly_memories").upsert({
                 "user_id": user_id,
                 "memory_type": mem.get("type", "fact"),
                 "content": content,
                 "confidence": float(mem.get("confidence", 0.7)),
                 "last_reinforced": "now()",
+                "embedding": embedding,
             }, on_conflict="user_id,content").execute()
     except Exception:
         pass  # Silent fail — memory is enhancement not core
@@ -43,7 +51,7 @@ async def extract_and_store_memories(user_id: str, conversation: list):
 
 def get_memory_context(user_id: str) -> str:
     try:
-        res = supabase.table("agent_memory") \
+        res = supabase.table("aly_memories") \
             .select("content, memory_type") \
             .eq("user_id", user_id) \
             .order("last_reinforced", desc=True) \

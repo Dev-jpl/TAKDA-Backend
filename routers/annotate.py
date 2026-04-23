@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Literal
 from database import supabase
+from services.embeddings import embed_text
 
 router = APIRouter(prefix="/annotate", tags=["annotate"])
 
@@ -39,12 +40,20 @@ async def get_document_annotations(document_id: str):
 @router.post("/")
 async def create_annotation(body: AnnotationCreate):
     """Create a new insight/annotation."""
+    
+    try:
+        embedding = embed_text(body.content)
+    except Exception as e:
+        print(f"Failed to generate embedding for annotation: {e}")
+        embedding = None
+
     res = supabase.table("annotations").insert({
         "hub_id": body.hub_id,
         "user_id": body.user_id,
         "document_id": body.document_id,
         "content": body.content,
         "category": body.category,
+        "embedding": embedding,
     }).execute()
     
     if not res.data:
@@ -58,6 +67,12 @@ async def update_annotation(annotation_id: str, body: AnnotationUpdate):
     updates = {k: v for k, v in body.dict().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+        
+    if "content" in updates:
+        try:
+            updates["embedding"] = embed_text(updates["content"])
+        except Exception as e:
+            print(f"Failed to update embedding for annotation: {e}")
         
     res = supabase.table("annotations") \
         .update(updates) \

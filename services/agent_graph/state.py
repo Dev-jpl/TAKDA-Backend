@@ -10,6 +10,8 @@ class AgentState(TypedDict):
     hub_ids: List[str]
 
     # Context (loaded by node_load_context)
+    context_bio: str
+    wellbeing_signals: List[str]
     tasks: List[dict]
     hubs: List[dict]
     spaces: List[dict]
@@ -19,6 +21,7 @@ class AgentState(TypedDict):
     knowledge_docs: List[dict]
     strava_activities: List[dict]
     integrations: List[dict]
+    module_definitions: List[dict]
     docs_text: str
 
     # Conversation history

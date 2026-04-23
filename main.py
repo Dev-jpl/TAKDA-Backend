@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from routers import knowledge, spaces, track, hubs, annotate, deliver, automate, coordinator, events, integrations, aly, vault, space_tools, screens, addons
+from routers import knowledge, spaces, track, hubs, annotate, deliver, automate, coordinator, events, integrations, aly, vault, space_tools, screens, addons, modules, payments
 from routers import strava, fitness
 
 load_dotenv()
@@ -18,7 +18,9 @@ app.add_middleware(
 
 app.include_router(spaces.router)
 app.include_router(space_tools.router)
-app.include_router(screens.router)
+app.include_router(automate.router)
+app.include_router(modules.router)
+app.include_router(payments.router)
 app.include_router(hubs.router)
 app.include_router(knowledge.router)
 app.include_router(track.router)
@@ -26,13 +28,13 @@ app.include_router(annotate.router)
 app.include_router(deliver.router)
 app.include_router(events.router)
 app.include_router(integrations.router)
-app.include_router(automate.router)
 app.include_router(coordinator.router, prefix="/coordinator")
 app.include_router(aly.router)
 app.include_router(vault.router)
 app.include_router(strava.router)
 app.include_router(fitness.router)
 app.include_router(addons.router)
+app.include_router(screens.router)
 
 @app.get("/")
 def root():

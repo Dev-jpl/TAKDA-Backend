@@ -82,46 +82,11 @@ def create_event(title: str, start_time: str,
 
 
 @tool
-def log_expense(amount: float, merchant: str = None,
-                category: str = "General", hub_name: str = None,
-                user_id: str = "", currency: str = "PHP") -> dict:
+def log_module_entry(module_slug: str, data: dict, hub_name: str = None, user_id: str = "") -> dict:
     """
-    Logs a financial expense (money spent / cost paid).
-    ALWAYS prefer this over log_food when:
-      - the user explicitly mentions "expense tracker", "spending", "cost", or "budget"
-      - the numbers in the message represent PRICES or CURRENCY AMOUNTS (e.g. "rice - 15", "chicken - 79")
-      - the user says they "bought", "paid for", or "spent" something
-    If the user lists multiple items with prices, call this tool ONCE PER ITEM.
-    Do NOT use this for calorie or nutrition tracking — use log_food for that.
-    category: General | Food | Transport | Health | Entertainment | Shopping | Utilities | Other
-    hub_name: optional hub name to associate the expense with.
-    """
-    hub_id = None
-    if hub_name:
-        res = supabase.table("hubs").select("id,name").eq("user_id", user_id).execute()
-        hub = next((h for h in (res.data or []) if h["name"].lower() == hub_name.lower()), None)
-        if hub:
-            hub_id = hub["id"]
-
-    supabase.table("expenses").insert({
-        "amount": amount, "merchant": merchant, "category": category,
-        "hub_id": hub_id, "user_id": user_id, "currency": currency,
-        "date": datetime.now().date().isoformat(),
-    }).execute()
-    return {"success": True, "type": "expense_logged",
-            "label": f"{currency} {amount:.2f} at {merchant or 'unknown'}"}
-
-
-@tool
-def log_food(food_name: str, calories: float = None,
-             meal_type: str = "meal", hub_name: str = None,
-             user_id: str = "") -> dict:
-    """
-    Logs a food entry for CALORIE or NUTRITION tracking only.
-    ONLY use this when the user is tracking what they ATE (calories, macros, meals) — NOT what they spent.
-    Do NOT use this if the user mentions "expense tracker", prices, costs, or currency amounts.
-    If the numbers alongside food items represent PRICES (not calories), use log_expense instead.
-    meal_type: breakfast | lunch | dinner | snack | meal
+    Logs data into any custom or system module.
+    module_slug: the unique identifier for the module (e.g. 'calorie_counter', 'water_tracker')
+    data: a dictionary containing the fields to log, based on the module's schema.
     hub_name: optional hub name to associate the entry with.
     """
     hub_id = None
@@ -131,13 +96,21 @@ def log_food(food_name: str, calories: float = None,
         if hub:
             hub_id = hub["id"]
 
-    supabase.table("food_logs").insert({
-        "food_name": food_name, "calories": calories,
-        "meal_type": meal_type, "hub_id": hub_id,
-        "user_id": user_id, "logged_at": datetime.now().isoformat(),
+    # Get module def
+    def_res = supabase.table("module_definitions").select("id").eq("slug", module_slug).limit(1).execute()
+    def_id = def_res.data[0]["id"] if def_res.data else None
+
+    if not def_id:
+        return {"success": False, "error": f"Module '{module_slug}' not found."}
+
+    supabase.table("module_entries").insert({
+        "module_def_id": def_id,
+        "user_id": user_id,
+        "hub_id": hub_id,
+        "data": data
     }).execute()
-    return {"success": True, "type": "food_logged",
-            "label": f"{food_name}" + (f" · {calories} kcal" if calories else "")}
+
+    return {"success": True, "type": "module_entry_logged", "module": module_slug, "data": data}
 
 
 @tool
@@ -221,6 +194,6 @@ def create_hub(name: str, space_name: str,
 # Export all tools
 AGENT_TOOLS = [
     create_task, update_task, create_event,
-    log_expense, log_food, save_to_vault, save_report,
+    log_module_entry, save_to_vault, save_report,
     create_space, create_hub,
 ]
